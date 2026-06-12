@@ -23,14 +23,19 @@ class QueueCLI:
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 命令示例:
-  # 车辆签到
+  # 车辆签到（--operator 可以放在主命令或子命令后面）
   queue checkin --plate 京A12345 --phone 13800138000 --cargo dangerous --carrier 顺丰 --appointment "09:00" --operator 张三
+  queue --operator 张三 checkin --plate 京A12345 --phone 13800138000 --cargo dangerous --carrier 顺丰 --appointment "09:00"
 
   # CSV批量导入（带预检确认）
   queue checkin --import appointment.csv --operator 张三
 
-  # 查看等待车辆
-  queue call --list
+  # 查看等待车辆（支持全部5种货类筛选）
+  queue call --list --general
+  queue call --list --bulk
+  queue call --list --container
+  queue call --list --dangerous
+  queue call --list --refrigerated
 
   # 调度建议模式
   queue call --suggest --count 3 --operator 张三
@@ -44,42 +49,37 @@ class QueueCLI:
   # 调整月台
   queue call --set-platform 5 C1 --operator 张三
 
-  # 标记延迟
+  # 标记延迟 / 恢复排队 / 取消排队 / 改预约时段
   queue delay --queue 5 --reason late --note "司机堵车" --operator 张三
-
-  # 恢复排队
   queue delay --queue 5 --resume --operator 张三
-
-  # 取消排队
   queue delay --queue 5 --cancel --operator 张三
-
-  # 改预约时段
   queue delay --queue 5 --change-appointment "14:00" --operator 张三
 
-  # 开始装卸
+  # 开始装卸 / 完成装卸
   queue finish --queue 5 --start --operator 张三
-
-  # 完成装卸
   queue finish --queue 5 --operator 张三
 
-  # 查看操作日志
+  # 查看操作日志（支持按排队号/车牌/时间段/操作类型查询）
   queue logs --limit 20
   queue logs --queue 5 --plate 京A12345
   queue logs --start "2026-06-12 08:00:00" --end "2026-06-12 16:00:00"
 
-  # 导出交接班日志
+  # 导出交接班日志（每辆车最后一次真实状态变化）
   queue logs --export-shift shift_log.json --start "2026-06-12 08:00:00" --end "2026-06-12 16:00:00"
 
-  # 组合筛选报表（所有筛选均显示完整汇总）
-  queue report --carrier 顺丰物流 --platform A1 --carrier-stats --operator 张三
+  # 组合筛选报表（支持全部5种货类）
+  queue report --general --carrier-stats
+  queue report --bulk
+  queue report --container
   queue report --dangerous --carrier-stats
   queue report --refrigerated
+  queue report --carrier 顺丰物流 --platform A1 --carrier-stats --operator 张三
 
-  # 导出筛选后的报表（JSON + CSV）
-  queue report --dangerous --export dangerous_report.json --export-csv dangerous_detail.csv
+  # 导出筛选后的报表（JSON + CSV明细）
+  queue report --general --export general_report.json --export-csv general_detail.csv
             """
         )
-        parser.add_argument("--operator", default="系统", help="调度员姓名，用于操作日志记录")
+        parser.add_argument("--operator", default=None, help="调度员姓名，用于操作日志记录，可放在主命令或子命令后面")
         subparsers = parser.add_subparsers(dest="command", required=True, help="可用命令")
 
         self._add_checkin_parser(subparsers)
@@ -93,6 +93,7 @@ class QueueCLI:
 
     def _add_checkin_parser(self, subparsers):
         parser = subparsers.add_parser("checkin", help="车辆签到或CSV批量导入")
+        parser.add_argument("--operator", default=None, help="调度员姓名（同主参数）")
         parser.add_argument("--import", dest="import_csv", help="从CSV文件批量导入预约车辆（带预检确认）")
         parser.add_argument("--plate", help="车牌号 (如: 京A12345)")
         parser.add_argument("--phone", help="司机电话")
@@ -105,12 +106,16 @@ class QueueCLI:
 
     def _add_call_parser(self, subparsers):
         parser = subparsers.add_parser("call", help="查询等待车辆、批量叫号、调度建议、调整月台")
+        parser.add_argument("--operator", default=None, help="调度员姓名（同主参数）")
         parser.add_argument("--list", action="store_true", help="列出当前所有等待车辆")
         parser.add_argument("--count", type=int, help="按顺序叫号的数量")
         parser.add_argument("--queue", help="指定叫号的排队号，多个用逗号分隔 (如: 5,6,7)")
         parser.add_argument("--platform", help="指定装卸月台")
         parser.add_argument("--set-platform", nargs=2, metavar=("QUEUE", "PLATFORM"),
                             help="调整指定排队号车辆的月台")
+        parser.add_argument("--general", action="store_true", help="只查看普通货物车辆")
+        parser.add_argument("--bulk", action="store_true", help="只查看散装货物车辆")
+        parser.add_argument("--container", action="store_true", help="只查看集装箱车辆")
         parser.add_argument("--dangerous", action="store_true", help="只查看危险品车辆")
         parser.add_argument("--refrigerated", action="store_true", help="只查看冷藏车辆")
         parser.add_argument("--include-delayed", action="store_true", help="叫号时包含延迟车辆")
@@ -118,6 +123,7 @@ class QueueCLI:
 
     def _add_delay_parser(self, subparsers):
         parser = subparsers.add_parser("delay", help="标记延迟 / 恢复排队 / 取消排队 / 改预约时段")
+        parser.add_argument("--operator", default=None, help="调度员姓名（同主参数）")
         parser.add_argument("--queue", type=int, required=True, help="排队号")
         parser.add_argument("--reason",
                             choices=["late", "document", "carrier", "yard", "equipment", "priority", "other"],
@@ -130,11 +136,16 @@ class QueueCLI:
 
     def _add_finish_parser(self, subparsers):
         parser = subparsers.add_parser("finish", help="记录开始和完成装卸时间")
+        parser.add_argument("--operator", default=None, help="调度员姓名（同主参数）")
         parser.add_argument("--queue", type=int, required=True, help="排队号")
         parser.add_argument("--start", action="store_true", help="标记开始装卸")
 
     def _add_report_parser(self, subparsers):
         parser = subparsers.add_parser("report", help="统计报表、组合筛选、导出明细、超时提示")
+        parser.add_argument("--operator", default=None, help="调度员姓名（同主参数）")
+        parser.add_argument("--general", action="store_true", help="只查看普通货物车辆")
+        parser.add_argument("--bulk", action="store_true", help="只查看散装货物车辆")
+        parser.add_argument("--container", action="store_true", help="只查看集装箱车辆")
         parser.add_argument("--dangerous", action="store_true", help="只查看危险品车辆")
         parser.add_argument("--refrigerated", action="store_true", help="只查看冷藏车辆")
         parser.add_argument("--carrier", help="按承运商筛选")
@@ -147,8 +158,8 @@ class QueueCLI:
 
     def _add_logs_parser(self, subparsers):
         parser = subparsers.add_parser("logs", help="查看操作日志 / 导出交接班日志")
+        parser.add_argument("--operator", default=None, help="调度员姓名（同主参数，也用于按调度员筛选日志）")
         parser.add_argument("--limit", type=int, default=50, help="显示最近N条记录，默认50条")
-        parser.add_argument("--operator", help="按调度员筛选")
         parser.add_argument("--type", choices=["checkin", "call", "platform", "start", "finish", "delay",
                                                "resume", "cancel", "appointment", "import", "export"],
                             help="按操作类型筛选")
@@ -157,6 +168,23 @@ class QueueCLI:
         parser.add_argument("--start", dest="start_time", help="开始时间 (如: 2026-06-12 08:00:00)")
         parser.add_argument("--end", dest="end_time", help="结束时间 (如: 2026-06-12 16:00:00)")
         parser.add_argument("--export-shift", dest="export_shift", help="导出交接班日志到指定JSON文件")
+
+    def _resolve_operator(self, args) -> str:
+        sub_op = getattr(args, 'operator', None)
+        return sub_op if sub_op else "系统"
+
+    def _parse_cargo_filter(self, args) -> Optional[CargoType]:
+        if getattr(args, 'general', False):
+            return CargoType.GENERAL
+        if getattr(args, 'bulk', False):
+            return CargoType.BULK
+        if getattr(args, 'container', False):
+            return CargoType.CONTAINER
+        if getattr(args, 'dangerous', False):
+            return CargoType.DANGEROUS
+        if getattr(args, 'refrigerated', False):
+            return CargoType.REFRIGERATED
+        return None
 
     def _parse_cargo_type(self, cargo: str) -> CargoType:
         mapping = {
@@ -195,11 +223,6 @@ class QueueCLI:
             "export": OperationType.EXPORT_REPORT
         }
         return mapping[op_type]
-
-    def _format_time(self, time_str: Optional[str]) -> str:
-        if not time_str:
-            return "-"
-        return time_str
 
     def _print_vehicle_table(self, vehicles: List[Vehicle], show_details: bool = False):
         if not vehicles:
@@ -270,7 +293,7 @@ class QueueCLI:
         print("=" * 70)
 
     def cmd_checkin(self, args):
-        operator = args.operator
+        operator = self._resolve_operator(args)
 
         if args.import_csv:
             print(f"\n📥 开始CSV预检: {args.import_csv}")
@@ -384,7 +407,7 @@ class QueueCLI:
         self.check_overtime_vehicles()
 
     def cmd_call(self, args):
-        operator = args.operator
+        operator = self._resolve_operator(args)
 
         if args.set_platform:
             queue_num = int(args.set_platform[0])
@@ -440,13 +463,10 @@ class QueueCLI:
             self.check_overtime_vehicles()
             return
 
-        if args.dangerous:
-            vehicles = [v for v in self.storage.get_waiting_vehicles() if v.cargo_type == CargoType.DANGEROUS]
-            print("\n📋 危险品等待车辆列表：")
-            self._print_vehicle_table(vehicles, show_details=True)
-        elif args.refrigerated:
-            vehicles = [v for v in self.storage.get_waiting_vehicles() if v.cargo_type == CargoType.REFRIGERATED]
-            print("\n📋 冷藏货物等待车辆列表：")
+        cargo_filter = self._parse_cargo_filter(args)
+        if cargo_filter:
+            vehicles = [v for v in self.storage.get_waiting_vehicles() if v.cargo_type == cargo_filter]
+            print(f"\n📋 {cargo_filter.value}等待车辆列表：")
             self._print_vehicle_table(vehicles, show_details=True)
         elif args.list:
             vehicles = self.storage.get_waiting_vehicles()
@@ -489,7 +509,7 @@ class QueueCLI:
         self.check_overtime_vehicles()
 
     def cmd_delay(self, args):
-        operator = args.operator
+        operator = self._resolve_operator(args)
 
         if args.resume:
             v = self.storage.resume_queue(args.queue, operator=operator)
@@ -568,7 +588,7 @@ class QueueCLI:
             print(f"错误：未找到排队号为 {args.queue} 的车辆")
 
     def cmd_finish(self, args):
-        operator = args.operator
+        operator = self._resolve_operator(args)
         if args.start:
             v = self.storage.start_loading(args.queue, operator=operator)
             if v:
@@ -606,21 +626,19 @@ class QueueCLI:
         self.check_overtime_vehicles()
 
     def cmd_report(self, args):
-        operator = args.operator
+        operator = self._resolve_operator(args)
         carrier = args.carrier
         platform = args.platform
-        cargo_type = None
+        cargo_type = self._parse_cargo_filter(args)
 
-        if args.dangerous:
-            cargo_type = CargoType.DANGEROUS
-            print("\n📊 危险品车辆报告")
-        elif args.refrigerated:
-            cargo_type = CargoType.REFRIGERATED
-            print("\n📊 冷藏车辆报告")
-        elif args.overtime:
-            print(f"\n📊 超时等待车辆报告 (阈值: {args.threshold}分钟)")
-        else:
-            print("\n📊 今日排队汇总报告")
+        title_parts = []
+        if cargo_type:
+            title_parts.append(f"{cargo_type.value}车辆")
+        if args.overtime:
+            title_parts.append(f"超时等待车辆报告 (阈值: {args.threshold}分钟)")
+        if not title_parts:
+            title_parts.append("今日排队汇总报告")
+        print(f"\n📊 {'，'.join(title_parts)}")
 
         filters = []
         if carrier:
@@ -677,10 +695,13 @@ class QueueCLI:
         plate = getattr(args, 'plate', None)
         start_time = getattr(args, 'start_time', None)
         end_time = getattr(args, 'end_time', None)
+        logs_operator_filter = getattr(args, 'operator', None)
 
-        if getattr(args, 'export_shift', None):
+        export_shift = getattr(args, 'export_shift', None)
+        export_operator = self._resolve_operator(args)
+        if export_shift:
             filepath = self.storage.export_shift_log(
-                args.export_shift, start_time=start_time, end_time=end_time, operator=args.operator
+                export_shift, start_time=start_time, end_time=end_time, operator=export_operator
             )
             print(f"\n✅ 交接班日志已导出到: {filepath}")
             handover = self.storage.get_shift_handover_data(start_time=start_time, end_time=end_time)
@@ -690,10 +711,16 @@ class QueueCLI:
                   f"装卸中: {handover['summary']['loading']} | 已完成: {handover['summary']['finished']} | "
                   f"延迟: {handover['summary']['delayed']} | 已取消: {handover['summary']['cancelled']}")
             print(f"   期间操作次数: {handover['operations_in_period']}")
+            if handover['vehicle_last_status']:
+                print(f"   车辆最后状态变化（只记录真实状态变更）:")
+                for s in handover['vehicle_last_status']:
+                    print(f"     #{s['queue_number']} {s['plate_number']}: "
+                          f"{s['last_status_change']} → {s['current_status']} "
+                          f"({s['last_operator']} @ {s['last_status_change_time']})")
             return
 
         logs = self.storage.get_logs(
-            operator=getattr(args, 'operator', None),
+            operator=logs_operator_filter,
             operation_type=op_type,
             queue_number=queue_number,
             plate_number=plate,
@@ -703,8 +730,8 @@ class QueueCLI:
         logs = logs[:args.limit]
 
         filter_parts = []
-        if getattr(args, 'operator', None):
-            filter_parts.append(f"调度员={args.operator}")
+        if logs_operator_filter:
+            filter_parts.append(f"调度员={logs_operator_filter}")
         if op_type:
             filter_parts.append(f"类型={op_type.value}")
         if queue_number:
@@ -730,7 +757,29 @@ class QueueCLI:
         print(f"共显示 {len(logs)} 条记录")
 
     def run(self, args=None):
-        parsed_args = self.parser.parse_args(args)
+        if args is None:
+            args = sys.argv[1:]
+
+        global_operator = None
+        remaining_args = []
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a == "--operator" and i + 1 < len(args):
+                global_operator = args[i + 1]
+                i += 2
+            elif a.startswith("--operator="):
+                global_operator = a.split("=", 1)[1]
+                i += 1
+            else:
+                remaining_args.append(a)
+                i += 1
+
+        parsed_args = self.parser.parse_args(remaining_args)
+
+        sub_operator = getattr(parsed_args, 'operator', None)
+        resolved_operator = sub_operator or global_operator or "系统"
+        parsed_args.operator = resolved_operator
 
         try:
             if parsed_args.command == "checkin":

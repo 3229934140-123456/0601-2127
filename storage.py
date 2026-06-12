@@ -86,6 +86,16 @@ class QueueStorage:
         all_logs = [OperationLog.from_dict(l) for l in data.get("logs", [])]
         all_logs.sort(key=lambda x: x.timestamp)
 
+        status_change_ops = {
+            OperationType.CHECKIN,       # 签到 → 等待中
+            OperationType.CALL,          # 叫号 → 已叫号
+            OperationType.START_LOADING, # 开始装卸 → 装卸中
+            OperationType.FINISH_LOADING,# 完成装卸 → 已完成
+            OperationType.MARK_DELAY,    # 标记延迟 → 延迟
+            OperationType.RESUME_QUEUE,  # 恢复排队 → 等待中
+            OperationType.CANCEL_QUEUE,  # 取消排队 → 已取消
+        }
+
         filtered_logs = all_logs
         if start_time:
             filtered_logs = [l for l in filtered_logs if l.timestamp >= start_time]
@@ -93,15 +103,20 @@ class QueueStorage:
             filtered_logs = [l for l in filtered_logs if l.timestamp <= end_time]
 
         for v in vehicles:
-            v_logs = [l for l in all_logs if l.queue_number == v.queue_number]
+            v_logs = [l for l in all_logs
+                      if l.queue_number == v.queue_number
+                      and l.operation_type in status_change_ops
+                      and l.plate_number]
             if v_logs:
+                last = v_logs[-1]
                 last_status[v.queue_number] = {
                     "queue_number": v.queue_number,
                     "plate_number": v.plate_number,
                     "current_status": v.status.value,
-                    "last_operation": v_logs[-1].operation_type.value,
-                    "last_operation_time": v_logs[-1].timestamp,
-                    "last_operator": v_logs[-1].operator,
+                    "last_status_change": last.operation_type.value,
+                    "last_status_change_detail": last.description,
+                    "last_status_change_time": last.timestamp,
+                    "last_operator": last.operator,
                     "platform": v.platform,
                     "carrier": v.carrier,
                     "cargo_type": v.cargo_type.value
@@ -244,6 +259,15 @@ class QueueStorage:
                 queue_number=called[0].queue_number
             )
             self.add_log(log)
+            for v in called:
+                per_log = OperationLog(
+                    operation_type=OperationType.CALL,
+                    operator=operator,
+                    description=f"叫号 #{v.queue_number} {v.plate_number}，月台：{v.platform or '未分配'}",
+                    queue_number=v.queue_number,
+                    plate_number=v.plate_number
+                )
+                self.add_log(per_log)
         return called
 
     def call_specific_vehicles(self, queue_numbers: List[int], platform: Optional[str] = None, operator: str = "系统") -> List[Vehicle]:
@@ -267,6 +291,15 @@ class QueueStorage:
                 queue_number=called[0].queue_number
             )
             self.add_log(log)
+            for v in called:
+                per_log = OperationLog(
+                    operation_type=OperationType.CALL,
+                    operator=operator,
+                    description=f"指定叫号 #{v.queue_number} {v.plate_number}，月台：{platform or '未分配'}",
+                    queue_number=v.queue_number,
+                    plate_number=v.plate_number
+                )
+                self.add_log(per_log)
         return called
 
     def set_platform(self, queue_number: int, platform: str, operator: str = "系统") -> Optional[Vehicle]:
@@ -468,6 +501,48 @@ class QueueStorage:
             vehicles=vehicles
         )
 
+    def _validate_dangerous_level(self, level: str) -> Optional[str]:
+        if not level:
+            return "危险品未填写 dangerous_level"
+        level = level.strip()
+        valid_patterns = [
+            r'^[1-9](\.\d)?$',
+            r'^[1-9]类$',
+            r'^[1-9]\.\d类$',
+            r'^[一二三四五六七八九]级$',
+            r'^[一二三四五六七八九]类$',
+            r'^甲[级类]$',
+            r'^乙[级类]$',
+            r'^丙[级类]$',
+            r'^GB\d+$',
+            r'^UN\d+$',
+        ]
+        for pat in valid_patterns:
+            if re.match(pat, level):
+                return None
+        return f"危险品等级 '{level}' 格式不合规（如：1类/3类/一级/甲级/二级 等）"
+
+    def _validate_temperature(self, temp: str) -> Optional[str]:
+        if not temp:
+            return "冷藏货未填写 temperature"
+        temp = temp.strip()
+        valid_patterns = [
+            r'^-?\d+(\.\d+)?$',
+            r'^-?\d+(\.\d+)?℃$',
+            r'^-?\d+(\.\d+)?°C$',
+            r'^-?\d+(\.\d+)?度$',
+            r'^-?\d+(\.\d+)?\s*[~至\-]\s*-?\d+(\.\d+)?(℃|°C|度)?$',
+            r'^冷冻$',
+            r'^冷藏$',
+            r'^室温$',
+            r'^常温$',
+            r'^恒温\d+(\.\d+)?(℃|°C)?$',
+        ]
+        for pat in valid_patterns:
+            if re.match(pat, temp):
+                return None
+        return f"冷藏温度 '{temp}' 格式不合规（如 -18℃、-18°C、2~8度、冷冻 等）"
+
     def _validate_csv_row(self, row: dict, row_num: int, existing_plates: set) -> Tuple[List[str], Optional[CargoType]]:
         warnings = []
         cargo_type_map = {
@@ -499,11 +574,15 @@ class QueueStorage:
         if not cargo_type:
             return [f"第{row_num}行: 无效货类 '{cargo_str}'"], None
 
-        if cargo_type == CargoType.DANGEROUS and not dangerous_level:
-            warnings.append(f"第{row_num}行: 危险品未填写 dangerous_level")
+        if cargo_type == CargoType.DANGEROUS:
+            err = self._validate_dangerous_level(dangerous_level or "")
+            if err:
+                warnings.append(f"第{row_num}行: {err}")
 
-        if cargo_type == CargoType.REFRIGERATED and not temperature:
-            warnings.append(f"第{row_num}行: 冷藏货未填写 temperature")
+        if cargo_type == CargoType.REFRIGERATED:
+            err = self._validate_temperature(temperature or "")
+            if err:
+                warnings.append(f"第{row_num}行: {err}")
 
         try:
             if len(appointment) <= 5 and ':' in appointment:

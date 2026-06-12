@@ -552,7 +552,7 @@ def test_operator_parameter():
     assert zhangsan_logs[0].operation_type == OperationType.CHECKIN
 
     lisi_logs = storage.get_logs(operator="李四")
-    assert len(lisi_logs) == 2
+    assert len(lisi_logs) == 3
 
     print("✅ 调度员参数关联测试通过")
 
@@ -809,6 +809,287 @@ def test_csv_preview_validation():
     print("✅ CSV预检数据验证测试通过")
 
 
+def test_operator_position():
+    print("\n🧪 测试26: --operator 位置灵活识别（子命令前后均可）...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+
+    from queue_cli import QueueCLI
+    cli = QueueCLI()
+    cli.storage = QueueStorage(test_dir)
+
+    cli.run([
+        "--operator", "主调度",
+        "checkin",
+        "--plate", "京X11111", "--phone", "13500135000",
+        "--cargo", "general", "--carrier", "测试承运",
+        "--appointment", "09:00"
+    ])
+    v_main = cli.storage.get_vehicle_by_queue(1)
+    assert v_main is not None, "主命令后--operator签到失败"
+
+    logs_main = cli.storage.get_logs(plate_number="京X11111")
+    assert len(logs_main) >= 1, "主命令--operator应有日志"
+    assert logs_main[0].operator == "主调度", f"主命令operator应为'主调度'，实际{logs_main[0].operator}"
+
+    cli.run([
+        "checkin",
+        "--plate", "京X22222", "--phone", "13500135001",
+        "--cargo", "bulk", "--carrier", "测试承运",
+        "--appointment", "10:00",
+        "--operator", "子调度"
+    ])
+    v_sub = cli.storage.get_vehicle_by_queue(2)
+    assert v_sub is not None, "子命令后--operator签到失败"
+
+    logs_sub = cli.storage.get_logs(plate_number="京X22222")
+    assert len(logs_sub) >= 1, "子命令--operator应有日志"
+    assert logs_sub[0].operator == "子调度", f"子命令operator应为'子调度'，实际{logs_sub[0].operator}"
+
+    cli.run([
+        "checkin",
+        "--plate", "京X33333", "--phone", "13500135002",
+        "--cargo", "container", "--carrier", "测试承运",
+        "--appointment", "11:00"
+    ])
+    logs_none = cli.storage.get_logs(plate_number="京X33333")
+    assert len(logs_none) >= 1, "无operator签到应有日志"
+    assert logs_none[0].operator == "系统", f"默认operator应为'系统'，实际{logs_none[0].operator}"
+
+    cli.run([
+        "--operator", "主优先",
+        "delay",
+        "--queue", "1", "--reason", "late",
+        "--operator", "子优先"
+    ])
+    logs_prio = cli.storage.get_logs(queue_number=1, operation_type=OperationType.MARK_DELAY)
+    assert len(logs_prio) >= 1, "子命令--operator优先未生效"
+    assert logs_prio[0].operator == "子优先", f"子命令--operator优先应为'子优先'，实际{logs_prio[0].operator}"
+
+    print("✅ --operator 位置灵活识别测试通过")
+
+
+def test_csv_dangerous_temperature_validation():
+    print("\n🧪 测试27: CSV预检危险品等级和冷藏温度格式校验...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    os.makedirs(test_dir, exist_ok=True)
+    storage = QueueStorage(test_dir)
+
+    csv_path = os.path.join(test_dir, "bad_cargo_fields.csv")
+    with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(["plate", "phone", "cargo", "carrier", "appointment", "dangerous_level", "temperature"])
+        w.writerow(["京D11111", "13800138000", "危险品", "圆通A", "09:00", "甲级", ""])
+        w.writerow(["京D22222", "13800138001", "危险品", "圆通B", "09:30", "乱填等级", ""])
+        w.writerow(["京D33333", "13800138002", "危险品", "圆通C", "10:00", "X99", ""])
+        w.writerow(["京D44444", "13800138003", "冷藏货物", "京东A", "10:30", "", "-18℃"])
+        w.writerow(["京D55555", "13800138004", "冷藏货物", "京东B", "11:00", "", "明显不对的温度"])
+        w.writerow(["京D66666", "13800138005", "冷藏货物", "京东C", "11:30", "", "2~8度"])
+        w.writerow(["京D77777", "13800138006", "危险品", "圆通D", "12:00", "3类", ""])
+        w.writerow(["京D88888", "13800138007", "冷藏货物", "京东D", "12:30", "", "冷冻"])
+        w.writerow(["京D99999", "13800138008", "普通货物", "中通D", "13:00", "", ""])
+
+    preview = storage.preview_csv_import(csv_path)
+
+    has_bad_dangerous = any("乱填等级" in w and "危险品等级" in w for w in preview["warnings"])
+    assert has_bad_dangerous, "应检测到'乱填等级'为无效危险品等级"
+
+    has_x99_dangerous = any("X99" in w and "危险品等级" in w for w in preview["warnings"])
+    assert has_x99_dangerous, "应检测到'X99'为无效危险品等级"
+
+    has_bad_temp = any("明显不对的温度" in w and "冷藏温度" in w for w in preview["warnings"])
+    assert has_bad_temp, "应检测到'明显不对的温度'为无效冷藏温度"
+
+    valid_plates = [r["plate"] for r in preview["valid_rows"]]
+    assert "京D22222" not in valid_plates, "危险品乱填等级不应进入有效行"
+    assert "京D33333" not in valid_plates, "危险品X99不应进入有效行"
+    assert "京D55555" not in valid_plates, "冷藏明显不对温度不应进入有效行"
+    assert "京D11111" in valid_plates, "危险品甲级应为有效"
+    assert "京D44444" in valid_plates, "冷藏-18℃应为有效"
+    assert "京D66666" in valid_plates, "冷藏2~8度应为有效"
+    assert "京D77777" in valid_plates, "危险品3类应为有效"
+    assert "京D88888" in valid_plates, "冷藏冷冻应为有效"
+    assert "京D99999" in valid_plates, "普通货物应为有效"
+
+    assert preview["errors"] >= 3, f"至少应有3个错误行，实际{preview['errors']}"
+
+    failed_file = os.path.join(test_dir, "bad_cargo_fields_failed.csv")
+    storage.export_failed_rows(preview["error_rows"], failed_file)
+    assert os.path.exists(failed_file), "失败行文件未生成"
+
+    with open(failed_file, 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        failed_rows = list(reader)
+    assert len(failed_rows) >= 3, f"失败文件应至少3行，实际{len(failed_rows)}"
+    plates_failed = [r['plate'] for r in failed_rows]
+    assert "京D22222" in plates_failed or "京D33333" in plates_failed, "失败文件应包含乱填等级/无效等级车辆"
+
+    print("✅ CSV危险品等级和冷藏温度校验测试通过")
+
+
+def test_shift_handover_status_change_only():
+    print("\n🧪 测试28: 交接班日志只追踪真实状态变化（排除改预约/月台调整）...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    v1 = Vehicle(plate_number="京Z11111", driver_phone="13600136000",
+                 cargo_type=CargoType.GENERAL, carrier="承运A",
+                 appointment_time="2026-06-12 09:00:00")
+    v1 = storage.add_vehicle(v1, operator="调度A")
+
+    storage.call_specific_vehicles([1], platform="A1", operator="调度B")
+    storage.set_platform(1, "A2", operator="调度B")
+    storage.change_appointment(1, "2026-06-12 14:00:00", operator="调度C")
+
+    handover = storage.get_shift_handover_data()
+    v1_status = next((s for s in handover["vehicle_last_status"] if s["queue_number"] == 1), None)
+    assert v1_status is not None, "车辆1应有最后状态记录"
+    assert v1_status["last_status_change"] == OperationType.CALL.value, \
+        f"最后状态变化应为'叫号'（排除改预约/月台调整），实际{v1_status['last_status_change']}"
+    assert v1_status["last_operator"] == "调度B", \
+        f"最后状态变化操作人应为'调度B'，实际{v1_status['last_operator']}"
+    assert "last_status_change_detail" in v1_status, "应有状态变更详情字段"
+    assert v1_status["current_status"] == VehicleStatus.CALLED.value
+
+    v2 = Vehicle(plate_number="京Z22222", driver_phone="13600136001",
+                 cargo_type=CargoType.DANGEROUS, carrier="承运B",
+                 appointment_time="2026-06-12 10:00:00", dangerous_level="3类")
+    v2 = storage.add_vehicle(v2, operator="调度A")
+    storage.mark_delay(2, DelayReason.LATE_ARRIVAL, note="堵车", operator="调度D")
+    storage.change_appointment(2, "2026-06-12 16:00:00", operator="调度E")
+
+    handover2 = storage.get_shift_handover_data()
+    v2_status = next((s for s in handover2["vehicle_last_status"] if s["queue_number"] == 2), None)
+    assert v2_status is not None, "车辆2应有最后状态记录"
+    assert v2_status["last_status_change"] == OperationType.MARK_DELAY.value, \
+        f"车辆2最后状态变化应为'标记延迟'，实际{v2_status['last_status_change']}"
+    assert v2_status["last_operator"] == "调度D", \
+        f"车辆2最后状态操作人应为'调度D'，实际{v2_status['last_operator']}"
+
+    print("✅ 交接班日志只追踪真实状态变化测试通过")
+
+
+def test_call_per_vehicle_logs():
+    print("\n🧪 测试29: 批量/建议叫号每辆车有独立日志，可按车牌追溯...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    plates = ["京Y11111", "京Y22222", "京Y33333", "京Y44444", "京Y55555"]
+    for i, p in enumerate(plates, start=1):
+        v = Vehicle(plate_number=p, driver_phone=f"137001370{i:02d}",
+                    cargo_type=CargoType.GENERAL, carrier="承运商批量",
+                    appointment_time=f"2026-06-12 0{i}:00:00")
+        storage.add_vehicle(v, operator="调度一")
+
+    storage.call_vehicles(3, platform="A1", operator="调度二")
+
+    for p in plates[:3]:
+        logs_p = storage.get_logs(plate_number=p)
+        call_logs = [l for l in logs_p if l.operation_type == OperationType.CALL]
+        assert len(call_logs) >= 1, f"车牌{p}按车牌查不到叫号日志"
+        assert call_logs[0].plate_number == p, f"车牌{p}的叫号日志plate_number字段缺失"
+        assert call_logs[0].operator == "调度二", f"车牌{p}叫号操作人错误"
+        assert call_logs[0].queue_number is not None, f"车牌{p}叫号日志排队号缺失"
+
+    storage.call_specific_vehicles([4, 5], platform="A2", operator="调度三")
+    for p in plates[3:]:
+        logs_p = storage.get_logs(plate_number=p, operation_type=OperationType.CALL)
+        assert len(logs_p) >= 1, f"指定叫号车牌{p}按车牌查不到叫号日志"
+        assert logs_p[0].operator == "调度三", f"指定叫号车牌{p}操作人错误"
+
+    logs_count = len(storage.get_logs(operation_type=OperationType.CALL))
+    assert logs_count >= 7, f"应有>=7条叫号日志（2聚合+5单车），实际{logs_count}"
+
+    print("✅ 批量/指定叫号每辆车独立日志测试通过")
+
+
+def test_all_cargo_type_report_filters():
+    print("\n🧪 测试30: 所有5种货类筛选报表与导出（general/bulk/container等）...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    cargo_specs = [
+        ("京T11111", CargoType.GENERAL, "承运G", "09:00"),
+        ("京T22222", CargoType.GENERAL, "承运G", "09:30"),
+        ("京T33333", CargoType.BULK, "承运B", "10:00"),
+        ("京T44444", CargoType.CONTAINER, "承运C", "10:30"),
+        ("京T55555", CargoType.DANGEROUS, "承运D", "11:00"),
+        ("京T66666", CargoType.REFRIGERATED, "承运R", "11:30"),
+    ]
+    for idx, (p, ct, car, appt) in enumerate(cargo_specs, start=1):
+        kwargs = {}
+        if ct == CargoType.DANGEROUS:
+            kwargs["dangerous_level"] = "3类"
+        if ct == CargoType.REFRIGERATED:
+            kwargs["temperature_required"] = "-18℃"
+        v = Vehicle(plate_number=p, driver_phone=f"139001390{idx:02d}",
+                    cargo_type=ct, carrier=car,
+                    appointment_time=f"2026-06-12 {appt}:00", **kwargs)
+        storage.add_vehicle(v, operator=f"调度{idx}")
+
+    storage.call_specific_vehicles([1], operator="调度X")
+    storage.call_specific_vehicles([3], operator="调度X")
+    storage.start_loading(1, operator="调度Y")
+    storage.finish_loading(1, operator="调度Y")
+    storage.mark_delay(5, DelayReason.LATE_ARRIVAL, operator="调度Z")
+
+    for ct, expected_count, label in [
+        (CargoType.GENERAL, 2, "普通货物"),
+        (CargoType.BULK, 1, "散装货物"),
+        (CargoType.CONTAINER, 1, "集装箱"),
+        (CargoType.DANGEROUS, 1, "危险品"),
+        (CargoType.REFRIGERATED, 1, "冷藏货物"),
+    ]:
+        rep = storage.get_daily_report(cargo_type=ct)
+        assert len(rep.vehicles) == expected_count, \
+            f"{label}筛选应返回{expected_count}辆，实际{len(rep.vehicles)}"
+        s = storage._compute_vehicle_summary(rep.vehicles)
+        for k in ("waiting", "called", "loading", "finished", "delayed", "cancelled",
+                  "overtime", "avg_stay_minutes"):
+            assert k in s, f"{label}汇总缺少键{k}"
+
+    json_path = os.path.join(test_dir, "bulk_report.json")
+    csv_path = os.path.join(test_dir, "container_report.csv")
+    storage.export_report_json(json_path, cargo_type=CargoType.BULK, operator="调度E")
+    storage.export_report_csv(csv_path, cargo_type=CargoType.CONTAINER, operator="调度F")
+
+    assert os.path.exists(json_path), "散装JSON报告未生成"
+    with open(json_path, 'r', encoding='utf-8') as f:
+        jr = json.load(f)
+    assert jr["filters"]["cargo_type"] == CargoType.BULK.value, "JSON筛选货类不正确"
+    assert "summary" in jr and jr["summary"]["called"] == 1, "JSON汇总called数量应为1"
+    assert len(jr["vehicles"]) == 1
+
+    assert os.path.exists(csv_path), "集装箱CSV报告未生成"
+    with open(csv_path, 'r', encoding='utf-8-sig') as f:
+        reader = csv.reader(f)
+        csv_rows = list(reader)
+    assert len(csv_rows) == 2, f"CSV应包含1表头+1数据共2行，实际{len(csv_rows)}"
+    assert "货类" in csv_rows[0], "CSV表头缺少'货类'列"
+    assert "京T44444" in csv_rows[1], "CSV明细缺少集装箱车辆"
+
+    from queue_cli import QueueCLI
+    cli = QueueCLI()
+    cli.storage = storage
+    cli.run(["report", "--general"])
+    cli.run(["report", "--bulk"])
+    cli.run(["report", "--container"])
+    cli.run(["call", "--list", "--general"])
+    cli.run(["call", "--list", "--bulk"])
+    cli.run(["call", "--list", "--container"])
+
+    print("✅ 所有5种货类筛选报表和导出测试通过")
+
+
 def main():
     print("=" * 60)
     print("开始公路运输装卸排队系统测试")
@@ -840,6 +1121,11 @@ def main():
         test_dispatch_platform_full,
         test_cargo_filter_summary,
         test_csv_preview_validation,
+        test_operator_position,
+        test_csv_dangerous_temperature_validation,
+        test_shift_handover_status_change_only,
+        test_call_per_vehicle_logs,
+        test_all_cargo_type_report_filters,
     ]
 
     passed = 0
