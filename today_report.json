@@ -1,0 +1,118 @@
+{
+  "export_date": "2026-06-12 19:43:09",
+  "report_date": "2026-06-12",
+  "summary": {
+    "total_vehicles": 4,
+    "waiting": 0,
+    "loading": 0,
+    "finished": 1,
+    "delayed": 1,
+    "overtime": 0,
+    "avg_stay_minutes": 1.0
+  },
+  "carrier_stats": [
+    {
+      "carrier": "顺丰物流",
+      "total": 2,
+      "finished": 1,
+      "avg_stay_minutes": 1.0,
+      "total_stay_minutes": 1
+    },
+    {
+      "carrier": "圆通物流",
+      "total": 1,
+      "finished": 0,
+      "avg_stay_minutes": 0,
+      "total_stay_minutes": 0
+    },
+    {
+      "carrier": "京东物流",
+      "total": 1,
+      "finished": 0,
+      "avg_stay_minutes": 0,
+      "total_stay_minutes": 0
+    }
+  ],
+  "vehicles": [
+    {
+      "plate_number": "京A12345",
+      "driver_phone": "13800138000",
+      "cargo_type": "普通货物",
+      "carrier": "顺丰物流",
+      "appointment_time": "2026-06-12 09:00:00",
+      "checkin_time": "2026-06-12 19:41:06",
+      "queue_number": 1,
+      "status": "已完成",
+      "platform": "A1",
+      "call_time": "2026-06-12 19:41:57",
+      "start_time": "2026-06-12 19:42:34",
+      "finish_time": "2026-06-12 19:42:34",
+      "delay_reason": null,
+      "delay_note": null,
+      "delay_time": null,
+      "id": "12201b90",
+      "dangerous_level": null,
+      "temperature_required": null
+    },
+    {
+      "plate_number": "京B67890",
+      "driver_phone": "13900139000",
+      "cargo_type": "危险品",
+      "carrier": "圆通物流",
+      "appointment_time": "2026-06-12 10:00:00",
+      "checkin_time": "2026-06-12 19:41:19",
+      "queue_number": 2,
+      "status": "已叫号",
+      "platform": "A1",
+      "call_time": "2026-06-12 19:41:57",
+      "start_time": null,
+      "finish_time": null,
+      "delay_reason": null,
+      "delay_note": null,
+      "delay_time": null,
+      "id": "9c2618b7",
+      "dangerous_level": "三级",
+      "temperature_required": null
+    },
+    {
+      "plate_number": "京D22222",
+      "driver_phone": "13600136000",
+      "cargo_type": "普通货物",
+      "carrier": "顺丰物流",
+      "appointment_time": "2026-06-12 14:00:00",
+      "checkin_time": "2026-06-12 19:41:19",
+      "queue_number": 3,
+      "status": "已叫号",
+      "platform": "A1",
+      "call_time": "2026-06-12 19:41:57",
+      "start_time": null,
+      "finish_time": null,
+      "delay_reason": null,
+      "delay_note": null,
+      "delay_time": null,
+      "id": "0a7ef360",
+      "dangerous_level": null,
+      "temperature_required": null
+    },
+    {
+      "plate_number": "京C11111",
+      "driver_phone": "13700137000",
+      "cargo_type": "冷藏货物",
+      "carrier": "京东物流",
+      "appointment_time": "2026-06-12 11:00:00",
+      "checkin_time": "2026-06-12 19:41:45",
+      "queue_number": 4,
+      "status": "延迟",
+      "platform": null,
+      "call_time": null,
+      "start_time": null,
+      "finish_time": null,
+      "delay_reason": "迟到",
+      "delay_note": "司机高速堵车",
+      "delay_time": "2026-06-12 19:42:34",
+      "id": "1b6bff77",
+      "dangerous_level": null,
+      "temperature_required": "-18°C"
+    }
+  ]
+}
