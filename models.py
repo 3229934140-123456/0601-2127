@@ -32,6 +32,45 @@ class DelayReason(str, Enum):
     OTHER = "其他"
 
 
+class OperationType(str, Enum):
+    CHECKIN = "车辆签到"
+    CALL = "叫号"
+    PLATFORM_CHANGE = "调整月台"
+    START_LOADING = "开始装卸"
+    FINISH_LOADING = "完成装卸"
+    MARK_DELAY = "标记延迟"
+    CANCEL = "取消排队"
+    BATCH_IMPORT = "批量导入"
+    EXPORT_REPORT = "导出报表"
+
+
+@dataclass
+class OperationLog:
+    operation_type: OperationType
+    operator: str
+    description: str
+    queue_number: Optional[int] = None
+    plate_number: Optional[str] = None
+    timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        for key, value in data.items():
+            if isinstance(value, Enum):
+                data[key] = value.value
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'OperationLog':
+        obj = cls.__new__(cls)
+        for key, value in data.items():
+            if key == 'operation_type' and isinstance(value, str):
+                value = OperationType(value)
+            setattr(obj, key, value)
+        return obj
+
+
 @dataclass
 class Vehicle:
     plate_number: str
