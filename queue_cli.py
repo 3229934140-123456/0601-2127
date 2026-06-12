@@ -67,6 +67,15 @@ class QueueCLI:
   # 导出交接班日志（每辆车最后一次真实状态变化）
   queue logs --export-shift shift_log.json --start "2026-06-12 08:00:00" --end "2026-06-12 16:00:00"
 
+  # 交接班班次视图（按早/中/晚班分组导出）
+  queue logs --export-shift shift_morning.json --shift 早班
+  queue logs --export-shift shift_afternoon.json --shift 中班
+  queue logs --export-shift shift_night.json --shift 晚班
+
+  # 车辆完整时间线（按车牌按时间顺序显示签到→叫号→装卸→完成等节点）
+  queue logs --timeline 京A12345
+  queue logs --timeline 京A12345 --export-timeline timeline_京A12345.json
+
   # 组合筛选报表（支持全部5种货类）
   queue report --general --carrier-stats
   queue report --bulk
@@ -157,7 +166,7 @@ class QueueCLI:
         parser.add_argument("--threshold", type=int, default=120, help="超时阈值（分钟），默认120分钟")
 
     def _add_logs_parser(self, subparsers):
-        parser = subparsers.add_parser("logs", help="查看操作日志 / 导出交接班日志")
+        parser = subparsers.add_parser("logs", help="查看操作日志 / 导出交接班日志 / 车辆时间线")
         parser.add_argument("--operator", default=None, help="调度员姓名（同主参数，也用于按调度员筛选日志）")
         parser.add_argument("--limit", type=int, default=50, help="显示最近N条记录，默认50条")
         parser.add_argument("--type", choices=["checkin", "call", "platform", "start", "finish", "delay",
@@ -168,6 +177,11 @@ class QueueCLI:
         parser.add_argument("--start", dest="start_time", help="开始时间 (如: 2026-06-12 08:00:00)")
         parser.add_argument("--end", dest="end_time", help="结束时间 (如: 2026-06-12 16:00:00)")
         parser.add_argument("--export-shift", dest="export_shift", help="导出交接班日志到指定JSON文件")
+        parser.add_argument("--shift", choices=["早班", "中班", "晚班"],
+                            help="班次视图：早班(06-14)/中班(14-22)/晚班(22-06)，配合--export-shift使用")
+        parser.add_argument("--timeline", help="查看指定车牌的完整时间线（签到→叫号→装卸→完成等）")
+        parser.add_argument("--export-timeline", dest="export_timeline",
+                            help="导出车辆时间线到指定JSON文件，需配合--timeline使用")
 
     def _resolve_operator(self, args) -> str:
         sub_op = getattr(args, 'operator', None)
@@ -696,23 +710,77 @@ class QueueCLI:
         start_time = getattr(args, 'start_time', None)
         end_time = getattr(args, 'end_time', None)
         logs_operator_filter = getattr(args, 'operator', None)
+        shift = getattr(args, 'shift', None)
+
+        timeline_plate = getattr(args, 'timeline', None)
+        export_timeline = getattr(args, 'export_timeline', None)
+        if timeline_plate:
+            tl = self.storage.get_vehicle_timeline(timeline_plate)
+            if not tl["found"]:
+                print(f"\n❌ 未找到车牌 {timeline_plate} 的车辆记录")
+                return
+
+            print(f"\n🕐 车辆时间线：{timeline_plate}")
+            print(f"   排队号：#{tl['queue_number']} | 当前状态：{tl['current_status']} | "
+                  f"货类：{tl['cargo_type']} | 承运商：{tl['carrier']}")
+            print("=" * 80)
+
+            if not tl["timeline"]:
+                print("   暂无时间线节点")
+            else:
+                for i, node in enumerate(tl["timeline"]):
+                    connector = "└─" if i == len(tl["timeline"]) - 1 else "├─"
+                    platform_info = f" | 月台：{node['platform']}" if node.get("platform") else ""
+                    print(f"   {connector} [{node['time']}] {node['event']}{platform_info}")
+                    print(f"      操作人：{node['operator']} | {node['description']}")
+
+            print("=" * 80)
+            print(f"   共 {len(tl['timeline'])} 个节点")
+
+            if export_timeline:
+                operator = self._resolve_operator(args)
+                filepath = self.storage.export_vehicle_timeline(export_timeline, timeline_plate, operator=operator)
+                print(f"\n✅ 车辆时间线已导出到: {filepath}")
+            return
 
         export_shift = getattr(args, 'export_shift', None)
         export_operator = self._resolve_operator(args)
         if export_shift:
             filepath = self.storage.export_shift_log(
-                export_shift, start_time=start_time, end_time=end_time, operator=export_operator
+                export_shift, start_time=start_time, end_time=end_time, shift=shift, operator=export_operator
             )
-            print(f"\n✅ 交接班日志已导出到: {filepath}")
-            handover = self.storage.get_shift_handover_data(start_time=start_time, end_time=end_time)
+            handover = self.storage.get_shift_handover_data(start_time=start_time, end_time=end_time, shift=shift)
+            shift_info = f"（{shift}）" if shift else ""
+            print(f"\n✅ 交接班日志{shift_info}已导出到: {filepath}")
             print(f"   时间段: {handover['period']['start']} ~ {handover['period']['end']}")
             print(f"   总车辆数: {handover['total_vehicles']}")
             print(f"   等待中: {handover['summary']['waiting']} | 已叫号: {handover['summary']['called']} | "
                   f"装卸中: {handover['summary']['loading']} | 已完成: {handover['summary']['finished']} | "
                   f"延迟: {handover['summary']['delayed']} | 已取消: {handover['summary']['cancelled']}")
-            print(f"   期间操作次数: {handover['operations_in_period']}")
+
+            groups = handover.get("shift_groups", {})
+            if groups:
+                group_labels = {
+                    "pending": "📋 待处理车辆",
+                    "called_not_loading": "📢 已叫号未装卸",
+                    "delayed_not_resumed": "⏸️  延迟未恢复",
+                    "overtime": "⚠️  超时等待",
+                }
+                for key, label in group_labels.items():
+                    items = groups.get(key, [])
+                    if items:
+                        print(f"\n   {label}（{len(items)}辆）:")
+                        for item in items:
+                            pn = item.get("plate_number", "?")
+                            qn = item.get("queue_number", "?")
+                            platform = item.get("platform") or "-"
+                            wait = item.get("waiting_minutes")
+                            wait_str = f" 已等{wait}分钟" if wait else ""
+                            last_change = item.get("last_status_change", "")
+                            print(f"     #{qn} {pn} 月台:{platform}{wait_str} [{last_change}]")
+
             if handover['vehicle_last_status']:
-                print(f"   车辆最后状态变化（只记录真实状态变更）:")
+                print(f"\n   车辆最后状态变化（只记录真实状态变更）:")
                 for s in handover['vehicle_last_status']:
                     print(f"     #{s['queue_number']} {s['plate_number']}: "
                           f"{s['last_status_change']} → {s['current_status']} "

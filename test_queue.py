@@ -1090,6 +1090,231 @@ def test_all_cargo_type_report_filters():
     print("✅ 所有5种货类筛选报表和导出测试通过")
 
 
+def test_plate_query_legacy_call_logs():
+    print("\n🧪 测试31: 按车牌查日志兼容旧数据叫号记录（无车牌字段通过排队号关联补全）...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    v1 = Vehicle(plate_number="京E11111", driver_phone="13800000001",
+                 cargo_type=CargoType.GENERAL, carrier="承运X",
+                 appointment_time="2026-06-12 08:00:00")
+    v1 = storage.add_vehicle(v1, operator="调度A")
+
+    storage.call_specific_vehicles([1], platform="A1", operator="调度B")
+
+    data = storage._read_data()
+    for log_entry in data["logs"]:
+        if log_entry.get("operation_type") == "叫号" and not log_entry.get("plate_number"):
+            log_entry["plate_number"] = None
+            if "叫号 1 辆" in log_entry.get("description", ""):
+                if "plate_number" in log_entry:
+                    del log_entry["plate_number"]
+    storage._write_data(data)
+
+    new_storage = QueueStorage(test_dir)
+    logs_by_plate = new_storage.get_logs(plate_number="京E11111")
+    call_logs = [l for l in logs_by_plate if l.operation_type == OperationType.CALL]
+    assert len(call_logs) >= 1, f"按车牌查旧叫号记录应至少1条，实际{len(call_logs)}"
+
+    has_call_detail = any(
+        l.plate_number == "京E11111" and l.queue_number == 1
+        for l in call_logs
+    )
+    assert has_call_detail, "旧叫号记录应通过排队号关联补全车牌"
+
+    checkin_logs = [l for l in logs_by_plate if l.operation_type == OperationType.CHECKIN]
+    assert len(checkin_logs) >= 1, "签到记录也应被查到"
+
+    print("✅ 按车牌查日志兼容旧数据叫号记录测试通过")
+
+
+def test_shift_handover_with_shift_groups():
+    print("\n🧪 测试32: 交接班班次视图（早/中/晚班分组导出，按状态分组）...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    v1 = Vehicle(plate_number="京M11111", driver_phone="13800000001",
+                 cargo_type=CargoType.GENERAL, carrier="承运A",
+                 appointment_time="2026-06-12 08:00:00")
+    v2 = Vehicle(plate_number="京M22222", driver_phone="13800000002",
+                 cargo_type=CargoType.GENERAL, carrier="承运B",
+                 appointment_time="2026-06-12 09:00:00")
+    v3 = Vehicle(plate_number="京M33333", driver_phone="13800000003",
+                 cargo_type=CargoType.GENERAL, carrier="承运C",
+                 appointment_time="2026-06-12 10:00:00")
+    v4 = Vehicle(plate_number="京M44444", driver_phone="13800000004",
+                 cargo_type=CargoType.GENERAL, carrier="承运D",
+                 appointment_time="2026-06-12 07:00:00")
+    storage.add_vehicle(v1, operator="早班调度")
+    storage.add_vehicle(v2, operator="早班调度")
+    storage.add_vehicle(v3, operator="早班调度")
+    storage.add_vehicle(v4, operator="早班调度")
+
+    storage.call_specific_vehicles([1], platform="A1", operator="早班调度")
+    storage.mark_delay(3, DelayReason.LATE_ARRIVAL, "堵车", operator="早班调度")
+
+    data = storage._read_data()
+    for v_entry in data["vehicles"]:
+        if v_entry["plate_number"] == "京M44444":
+            v_entry["checkin_time"] = (datetime.now() - timedelta(minutes=150)).strftime("%Y-%m-%d %H:%M:%S")
+    storage._write_data(data)
+
+    handover = storage.get_shift_handover_data(shift="早班")
+    assert "shift_groups" in handover, "应有shift_groups字段"
+    assert handover["shift"] == "早班", f"班次应为'早班'，实际{handover['shift']}"
+
+    groups = handover["shift_groups"]
+    assert "pending" in groups
+    assert "called_not_loading" in groups
+    assert "delayed_not_resumed" in groups
+    assert "overtime" in groups
+
+    called_items = groups["called_not_loading"]
+    assert len(called_items) >= 1, f"已叫号未装卸应>=1，实际{len(called_items)}"
+    called_plates = [item["plate_number"] for item in called_items]
+    assert "京M11111" in called_plates, "京M11111应在已叫号未装卸中"
+
+    delayed_items = groups["delayed_not_resumed"]
+    assert len(delayed_items) >= 1, f"延迟未恢复应>=1，实际{len(delayed_items)}"
+    delayed_plates = [item["plate_number"] for item in delayed_items]
+    assert "京M33333" in delayed_plates, "京M33333应在延迟未恢复中"
+
+    overtime_items = groups["overtime"]
+    assert len(overtime_items) >= 1, f"超时等待应>=1，实际{len(overtime_items)}"
+    overtime_plates = [item["plate_number"] for item in overtime_items]
+    assert "京M44444" in overtime_plates, "京M44444应在超时等待中"
+    assert any("waiting_minutes" in item for item in overtime_items), "超时等待应有waiting_minutes字段"
+
+    export_file = os.path.join(test_dir, "shift_morning.json")
+    filepath = storage.export_shift_log(export_file, shift="早班", operator="接班调度")
+    assert os.path.exists(filepath)
+    with open(filepath, 'r', encoding='utf-8') as f:
+        exported = json.load(f)
+    assert "shift_groups" in exported
+    assert exported["shift"] == "早班"
+
+    handover_default = storage.get_shift_handover_data()
+    assert handover_default["shift"] == "", "无班次参数时shift应为空"
+
+    print("✅ 交接班班次视图测试通过")
+
+
+def test_vehicle_timeline():
+    print("\n🧪 测试33: 车辆完整时间线输出（按时间顺序显示节点，可导出JSON）...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    v = Vehicle(plate_number="京TL0001", driver_phone="13800000001",
+                cargo_type=CargoType.GENERAL, carrier="时间线承运",
+                appointment_time="2026-06-12 08:00:00")
+    v = storage.add_vehicle(v, operator="调度A")
+
+    storage.call_specific_vehicles([1], platform="A1", operator="调度B")
+    storage.mark_delay(1, DelayReason.LATE_ARRIVAL, "堵车", operator="调度C")
+    storage.resume_queue(1, operator="调度D")
+    storage.call_specific_vehicles([1], platform="A1", operator="调度E")
+    storage.start_loading(1, operator="调度F")
+    storage.finish_loading(1, operator="调度G")
+
+    timeline = storage.get_vehicle_timeline("京TL0001")
+    assert timeline["found"] == True, "应找到车辆"
+    assert timeline["plate_number"] == "京TL0001"
+    assert timeline["queue_number"] == 1
+    assert timeline["current_status"] == VehicleStatus.FINISHED.value
+    assert timeline["cargo_type"] == CargoType.GENERAL.value
+    assert timeline["carrier"] == "时间线承运"
+
+    events = [node["event"] for node in timeline["timeline"]]
+    assert "签到" in events, "时间线应包含签到"
+    assert "叫号" in events, "时间线应包含叫号"
+    assert "延迟" in events, "时间线应包含延迟"
+    assert "恢复" in events, "时间线应包含恢复"
+    assert "开始装卸" in events, "时间线应包含开始装卸"
+    assert "完成装卸" in events, "时间线应包含完成装卸"
+
+    for i in range(len(timeline["timeline"]) - 1):
+        assert timeline["timeline"][i]["time"] <= timeline["timeline"][i + 1]["time"], \
+            "时间线节点应按时间正序排列"
+
+    for node in timeline["timeline"]:
+        assert "time" in node
+        assert "event" in node
+        assert "operator" in node
+        assert "description" in node
+
+    not_found = storage.get_vehicle_timeline("不存在车牌")
+    assert not_found["found"] == False, "不存在的车牌found应为False"
+
+    export_file = os.path.join(test_dir, "timeline.json")
+    filepath = storage.export_vehicle_timeline(export_file, "京TL0001", operator="导出员")
+    assert os.path.exists(filepath)
+    with open(filepath, 'r', encoding='utf-8') as f:
+        exported = json.load(f)
+    assert exported["found"] == True
+    assert len(exported["timeline"]) == len(timeline["timeline"])
+
+    print("✅ 车辆完整时间线输出测试通过")
+
+
+def test_shift_handover_legacy_data_compat():
+    print("\n🧪 测试34: 交接班导出兼容旧数据（已叫号车辆最后状态不显示成签到，回填车牌）...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    v1 = Vehicle(plate_number="京E22222", driver_phone="13800000001",
+                 cargo_type=CargoType.GENERAL, carrier="承运Y",
+                 appointment_time="2026-06-12 08:00:00")
+    v1 = storage.add_vehicle(v1, operator="调度A")
+
+    storage.call_specific_vehicles([1], platform="A1", operator="调度B")
+
+    data = storage._read_data()
+    for log_entry in data["logs"]:
+        if log_entry.get("operation_type") == "叫号":
+            if "plate_number" in log_entry:
+                del log_entry["plate_number"]
+    storage._write_data(data)
+
+    new_storage = QueueStorage(test_dir)
+    handover = new_storage.get_shift_handover_data()
+
+    v1_status = next((s for s in handover["vehicle_last_status"] if s["queue_number"] == 1), None)
+    assert v1_status is not None, "车辆1应有最后状态记录"
+    assert v1_status["current_status"] == VehicleStatus.CALLED.value, \
+        f"当前状态应为已叫号，实际{v1_status['current_status']}"
+    assert v1_status["last_status_change"] != "车辆签到", \
+        f"已叫号车辆最后状态变化不应是车辆签到，实际{v1_status['last_status_change']}"
+    assert v1_status["last_status_change"] == OperationType.CALL.value, \
+        f"已叫号车辆最后状态变化应为叫号，实际{v1_status['last_status_change']}"
+    assert v1_status["plate_number"] == "京E22222", \
+        f"旧数据车牌应被回填，实际{v1_status['plate_number']}"
+
+    v2 = Vehicle(plate_number="京E33333", driver_phone="13800000002",
+                 cargo_type=CargoType.GENERAL, carrier="承运Z",
+                 appointment_time="2026-06-12 09:00:00")
+    v2 = storage.add_vehicle(v2, operator="调度A")
+    data2 = storage._read_data()
+    data2["vehicles"][-1]["status"] = "已叫号"
+    storage._write_data(data2)
+
+    new_storage2 = QueueStorage(test_dir)
+    handover2 = new_storage2.get_shift_handover_data()
+    v2_status = next((s for s in handover2["vehicle_last_status"] if s["queue_number"] == 2), None)
+    assert v2_status is not None, "车辆2应有最后状态记录"
+    assert v2_status["last_status_change"] == OperationType.CALL.value, \
+        f"无叫号日志时已叫号车辆应推断叫号状态，实际{v2_status['last_status_change']}"
+
+    print("✅ 交接班导出兼容旧数据测试通过")
+
+
 def main():
     print("=" * 60)
     print("开始公路运输装卸排队系统测试")
@@ -1126,6 +1351,10 @@ def main():
         test_shift_handover_status_change_only,
         test_call_per_vehicle_logs,
         test_all_cargo_type_report_filters,
+        test_plate_query_legacy_call_logs,
+        test_shift_handover_with_shift_groups,
+        test_vehicle_timeline,
+        test_shift_handover_legacy_data_compat,
     ]
 
     passed = 0

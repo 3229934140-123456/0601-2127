@@ -64,14 +64,25 @@ class QueueStorage:
                  start_time: Optional[str] = None, end_time: Optional[str] = None) -> List[OperationLog]:
         data = self._read_data()
         logs = [OperationLog.from_dict(l) for l in data.get("logs", [])]
+        if plate_number:
+            related_qns = set()
+            for v in self.get_all_vehicles():
+                if v.plate_number == plate_number:
+                    related_qns.add(v.queue_number)
+            filtered = []
+            for l in logs:
+                if l.plate_number == plate_number:
+                    filtered.append(l)
+                elif not l.plate_number and l.queue_number and l.queue_number in related_qns:
+                    l.plate_number = plate_number
+                    filtered.append(l)
+            logs = filtered
         if operator:
             logs = [l for l in logs if l.operator == operator]
         if operation_type:
             logs = [l for l in logs if l.operation_type == operation_type]
         if queue_number:
             logs = [l for l in logs if l.queue_number == queue_number]
-        if plate_number:
-            logs = [l for l in logs if l.plate_number == plate_number]
         if start_time:
             logs = [l for l in logs if l.timestamp >= start_time]
         if end_time:
@@ -79,7 +90,45 @@ class QueueStorage:
         logs.sort(key=lambda x: x.timestamp, reverse=True)
         return logs
 
-    def get_shift_handover_data(self, start_time: Optional[str] = None, end_time: Optional[str] = None) -> Dict:
+    SHIFT_DEFINITIONS = {
+        "早班": {"start": "06:00:00", "end": "14:00:00"},
+        "中班": {"start": "14:00:00", "end": "22:00:00"},
+        "晚班": {"start": "22:00:00", "end": "06:00:00"},
+    }
+
+    def _resolve_shift_times(self, shift: Optional[str], start_time: Optional[str],
+                             end_time: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+        if not shift:
+            return start_time, end_time
+        shift_def = self.SHIFT_DEFINITIONS.get(shift)
+        if not shift_def:
+            return start_time, end_time
+        today = date.today().strftime("%Y-%m-%d")
+        shift_start = f"{today} {shift_def['start']}"
+        shift_end = f"{today} {shift_def['end']}"
+        if shift == "晚班":
+            next_day = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+            shift_end = f"{next_day} {shift_def['end']}"
+        if not start_time:
+            start_time = shift_start
+        if not end_time:
+            end_time = shift_end
+        return start_time, end_time
+
+    def _status_to_op_type(self, status: VehicleStatus) -> Optional[OperationType]:
+        mapping = {
+            VehicleStatus.WAITING: OperationType.CHECKIN,
+            VehicleStatus.CALLED: OperationType.CALL,
+            VehicleStatus.LOADING: OperationType.START_LOADING,
+            VehicleStatus.FINISHED: OperationType.FINISH_LOADING,
+            VehicleStatus.DELAYED: OperationType.MARK_DELAY,
+            VehicleStatus.CANCELLED: OperationType.CANCEL_QUEUE,
+        }
+        return mapping.get(status)
+
+    def get_shift_handover_data(self, start_time: Optional[str] = None, end_time: Optional[str] = None,
+                                shift: Optional[str] = None) -> Dict:
+        start_time, end_time = self._resolve_shift_times(shift, start_time, end_time)
         vehicles = self.get_all_vehicles()
         last_status = {}
         data = self._read_data()
@@ -87,14 +136,16 @@ class QueueStorage:
         all_logs.sort(key=lambda x: x.timestamp)
 
         status_change_ops = {
-            OperationType.CHECKIN,       # 签到 → 等待中
-            OperationType.CALL,          # 叫号 → 已叫号
-            OperationType.START_LOADING, # 开始装卸 → 装卸中
-            OperationType.FINISH_LOADING,# 完成装卸 → 已完成
-            OperationType.MARK_DELAY,    # 标记延迟 → 延迟
-            OperationType.RESUME_QUEUE,  # 恢复排队 → 等待中
-            OperationType.CANCEL_QUEUE,  # 取消排队 → 已取消
+            OperationType.CHECKIN,
+            OperationType.CALL,
+            OperationType.START_LOADING,
+            OperationType.FINISH_LOADING,
+            OperationType.MARK_DELAY,
+            OperationType.RESUME_QUEUE,
+            OperationType.CANCEL_QUEUE,
         }
+
+        vehicle_by_qn = {v.queue_number: v for v in vehicles}
 
         filtered_logs = all_logs
         if start_time:
@@ -105,8 +156,10 @@ class QueueStorage:
         for v in vehicles:
             v_logs = [l for l in all_logs
                       if l.queue_number == v.queue_number
-                      and l.operation_type in status_change_ops
-                      and l.plate_number]
+                      and l.operation_type in status_change_ops]
+            for l in v_logs:
+                if not l.plate_number and v.plate_number:
+                    l.plate_number = v.plate_number
             if v_logs:
                 last = v_logs[-1]
                 last_status[v.queue_number] = {
@@ -121,9 +174,65 @@ class QueueStorage:
                     "carrier": v.carrier,
                     "cargo_type": v.cargo_type.value
                 }
+            else:
+                inferred_op = self._status_to_op_type(v.status)
+                if inferred_op:
+                    last_status[v.queue_number] = {
+                        "queue_number": v.queue_number,
+                        "plate_number": v.plate_number,
+                        "current_status": v.status.value,
+                        "last_status_change": inferred_op.value,
+                        "last_status_change_detail": f"#{v.queue_number} {v.plate_number} 状态推断：{v.status.value}",
+                        "last_status_change_time": v.checkin_time,
+                        "last_operator": "系统(推断)",
+                        "platform": v.platform,
+                        "carrier": v.carrier,
+                        "cargo_type": v.cargo_type.value
+                    }
+
+        status_op_mapping = {
+            "已叫号": OperationType.CALL,
+            "装卸中": OperationType.START_LOADING,
+            "已完成": OperationType.FINISH_LOADING,
+            "延迟": OperationType.MARK_DELAY,
+            "已取消": OperationType.CANCEL_QUEUE,
+        }
+        for qn, entry in last_status.items():
+            expected_op = status_op_mapping.get(entry["current_status"])
+            if expected_op and entry["last_status_change"] != expected_op.value:
+                entry["last_status_change"] = expected_op.value
+                entry["last_status_change_detail"] = f"#{qn} {entry['plate_number']} 状态推断：{entry['current_status']}"
+                entry["last_operator"] = entry.get("last_operator", "系统(推断)")
+                if entry["last_operator"] != "系统(推断)":
+                    entry["last_operator"] = "系统(推断)"
+
+        pending = [s for s in last_status.values()
+                   if s["current_status"] in ["等待中", "已叫号"] and s["last_status_change"] == "车辆签到"]
+        called_not_loading = [s for s in last_status.values()
+                              if s["current_status"] == "已叫号"]
+        delayed_not_resumed = [s for s in last_status.values()
+                               if s["current_status"] == "延迟"]
+        overtime_vehicles = []
+        for v in vehicles:
+            if v.is_overtime() and v.status not in [VehicleStatus.FINISHED, VehicleStatus.CANCELLED]:
+                entry = last_status.get(v.queue_number, {
+                    "queue_number": v.queue_number,
+                    "plate_number": v.plate_number,
+                    "current_status": v.status.value,
+                    "platform": v.platform,
+                    "carrier": v.carrier,
+                    "cargo_type": v.cargo_type.value
+                })
+                entry["waiting_minutes"] = v.waiting_minutes()
+                overtime_vehicles.append(entry)
+
+        shift_label = shift or ""
+        period_start = start_time or "当日开始"
+        period_end = end_time or "当前"
 
         return {
-            "period": {"start": start_time or "当日开始", "end": end_time or "当前"},
+            "shift": shift_label,
+            "period": {"start": period_start, "end": period_end},
             "total_vehicles": len(vehicles),
             "summary": {
                 "waiting": len([v for v in vehicles if v.status == VehicleStatus.WAITING]),
@@ -135,18 +244,90 @@ class QueueStorage:
             },
             "operations_in_period": len(filtered_logs),
             "logs": filtered_logs,
-            "vehicle_last_status": sorted(last_status.values(), key=lambda x: x["queue_number"])
+            "vehicle_last_status": sorted(last_status.values(), key=lambda x: x["queue_number"]),
+            "shift_groups": {
+                "pending": sorted(pending, key=lambda x: x["queue_number"]),
+                "called_not_loading": sorted(called_not_loading, key=lambda x: x["queue_number"]),
+                "delayed_not_resumed": sorted(delayed_not_resumed, key=lambda x: x["queue_number"]),
+                "overtime": sorted(overtime_vehicles, key=lambda x: x["queue_number"]),
+            }
         }
 
     def export_shift_log(self, filepath: str, start_time: Optional[str] = None,
-                         end_time: Optional[str] = None, operator: str = "系统") -> str:
-        handover = self.get_shift_handover_data(start_time, end_time)
+                         end_time: Optional[str] = None, shift: Optional[str] = None,
+                         operator: str = "系统") -> str:
+        handover = self.get_shift_handover_data(start_time, end_time, shift=shift)
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(handover, f, ensure_ascii=False, indent=2, default=str)
+        shift_info = f"，班次：{shift}" if shift else ""
         log = OperationLog(
             operation_type=OperationType.EXPORT_REPORT,
             operator=operator,
-            description=f"导出交接班日志，时间段：{handover['period']['start']} ~ {handover['period']['end']}",
+            description=f"导出交接班日志{shift_info}，时间段：{handover['period']['start']} ~ {handover['period']['end']}",
+        )
+        self.add_log(log)
+        return filepath
+
+    def get_vehicle_timeline(self, plate_number: str) -> Dict:
+        vehicle = self.get_vehicle_by_plate(plate_number)
+        if not vehicle:
+            return {"plate_number": plate_number, "found": False, "timeline": []}
+
+        data = self._read_data()
+        all_logs = [OperationLog.from_dict(l) for l in data.get("logs", [])]
+
+        timeline_ops = {
+            OperationType.CHECKIN: "签到",
+            OperationType.CALL: "叫号",
+            OperationType.START_LOADING: "开始装卸",
+            OperationType.FINISH_LOADING: "完成装卸",
+            OperationType.MARK_DELAY: "延迟",
+            OperationType.RESUME_QUEUE: "恢复",
+            OperationType.CANCEL_QUEUE: "取消",
+        }
+
+        related_qns = {vehicle.queue_number}
+        timeline_logs = []
+        for l in all_logs:
+            if l.plate_number == plate_number and l.operation_type in timeline_ops:
+                timeline_logs.append(l)
+            elif not l.plate_number and l.queue_number in related_qns and l.operation_type in timeline_ops:
+                l.plate_number = plate_number
+                timeline_logs.append(l)
+
+        timeline_logs.sort(key=lambda x: x.timestamp)
+
+        nodes = []
+        for l in timeline_logs:
+            nodes.append({
+                "time": l.timestamp,
+                "event": timeline_ops[l.operation_type],
+                "operation_type": l.operation_type.value,
+                "operator": l.operator,
+                "description": l.description,
+                "queue_number": l.queue_number,
+                "platform": vehicle.platform if l.operation_type in [OperationType.CALL, OperationType.START_LOADING] else None,
+            })
+
+        return {
+            "plate_number": plate_number,
+            "found": True,
+            "queue_number": vehicle.queue_number,
+            "current_status": vehicle.status.value,
+            "cargo_type": vehicle.cargo_type.value,
+            "carrier": vehicle.carrier,
+            "timeline": nodes
+        }
+
+    def export_vehicle_timeline(self, filepath: str, plate_number: str, operator: str = "系统") -> str:
+        timeline = self.get_vehicle_timeline(plate_number)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(timeline, f, ensure_ascii=False, indent=2, default=str)
+        log = OperationLog(
+            operation_type=OperationType.EXPORT_REPORT,
+            operator=operator,
+            description=f"导出车辆时间线：{plate_number}",
+            plate_number=plate_number,
         )
         self.add_log(log)
         return filepath
