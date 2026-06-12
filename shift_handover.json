@@ -1,0 +1,91 @@
+{
+  "period": {
+    "start": "当日开始",
+    "end": "当前"
+  },
+  "total_vehicles": 5,
+  "summary": {
+    "waiting": 0,
+    "called": 3,
+    "loading": 0,
+    "finished": 0,
+    "delayed": 1,
+    "cancelled": 1
+  },
+  "operations_in_period": 16,
+  "logs": [
+    "OperationLog(operation_type=<OperationType.CHECKIN: '车辆签到'>, operator='张三', description='签到车辆 京E11111，货类：普通货物，承运商：中通物流', queue_number=1, plate_number='京E11111', timestamp='2026-06-12 20:54:10', id='efb001bd')",
+    "OperationLog(operation_type=<OperationType.CHECKIN: '车辆签到'>, operator='张三', description='签到车辆 京F22222，货类：危险品，承运商：圆通物流', queue_number=2, plate_number='京F22222', timestamp='2026-06-12 20:54:10', id='b9e737bb')",
+    "OperationLog(operation_type=<OperationType.CHECKIN: '车辆签到'>, operator='张三', description='签到车辆 京G33333，货类：冷藏货物，承运商：京东物流', queue_number=3, plate_number='京G33333', timestamp='2026-06-12 20:54:10', id='78b2f624')",
+    "OperationLog(operation_type=<OperationType.CHECKIN: '车辆签到'>, operator='张三', description='签到车辆 京H44444，货类：集装箱，承运商：中远海运', queue_number=4, plate_number='京H44444', timestamp='2026-06-12 20:54:10', id='35730133')",
+    "OperationLog(operation_type=<OperationType.CHECKIN: '车辆签到'>, operator='张三', description='签到车辆 京J55555，货类：普通货物，承运商：顺丰物流', queue_number=5, plate_number='京J55555', timestamp='2026-06-12 20:54:10', id='f7aaeb68')",
+    "OperationLog(operation_type=<OperationType.BATCH_IMPORT: '批量导入'>, operator='张三', description='CSV批量导入完成：成功5辆，跳过0辆，错误0辆', queue_number=None, plate_number=None, timestamp='2026-06-12 20:54:10', id='aff042d3')",
+    "OperationLog(operation_type=<OperationType.MARK_DELAY: '标记延迟'>, operator='李四', description='标记 #2 京F22222 延迟，原因：迟到，备注：高速堵车', queue_number=2, plate_number='京F22222', timestamp='2026-06-12 20:54:10', id='134ceec5')",
+    "OperationLog(operation_type=<OperationType.MARK_DELAY: '标记延迟'>, operator='李四', description='标记 #3 京G33333 延迟，原因：承运商要求，备注：承运商改单', queue_number=3, plate_number='京G33333', timestamp='2026-06-12 20:54:10', id='37e2143e')",
+    "OperationLog(operation_type=<OperationType.RESUME_QUEUE: '恢复排队'>, operator='李四', description='恢复 #3 京G33333 排队（原延迟原因：承运商要求）', queue_number=3, plate_number='京G33333', timestamp='2026-06-12 20:54:11', id='5b44a8b7')",
+    "OperationLog(operation_type=<OperationType.CHANGE_APPOINTMENT: '改预约时段'>, operator='李四', description='修改 #2 京F22222 预约时段：2026-06-12 09:00:00 → 2026-06-12 14:00:00', queue_number=2, plate_number='京F22222', timestamp='2026-06-12 20:54:11', id='1853decb')",
+    "OperationLog(operation_type=<OperationType.CANCEL_QUEUE: '取消排队'>, operator='李四', description='取消 #4 京H44444 排队（原状态：等待中）', queue_number=4, plate_number='京H44444', timestamp='2026-06-12 20:54:21', id='1914560b')",
+    "OperationLog(operation_type=<OperationType.CALL: '叫号'>, operator='王五', description='指定叫号：#1，月台：A1', queue_number=1, plate_number=None, timestamp='2026-06-12 20:54:21', id='dd5018cd')",
+    "OperationLog(operation_type=<OperationType.CALL: '叫号'>, operator='王五', description='指定叫号：#3，月台：B1', queue_number=3, plate_number=None, timestamp='2026-06-12 20:54:21', id='f22c0d9f')",
+    "OperationLog(operation_type=<OperationType.CALL: '叫号'>, operator='王五', description='指定叫号：#5，月台：A2', queue_number=5, plate_number=None, timestamp='2026-06-12 20:54:21', id='a3735125')",
+    "OperationLog(operation_type=<OperationType.EXPORT_REPORT: '导出报表'>, operator='王五', description='导出JSON报表，无筛选，共5条记录', queue_number=None, plate_number=None, timestamp='2026-06-12 20:54:57', id='5bdc9281')",
+    "OperationLog(operation_type=<OperationType.EXPORT_REPORT: '导出报表'>, operator='王五', description='导出CSV明细，无筛选，共5条记录', queue_number=None, plate_number=None, timestamp='2026-06-12 20:54:57', id='2bb33ce9')"
+  ],
+  "vehicle_last_status": [
+    {
+      "queue_number": 1,
+      "plate_number": "京E11111",
+      "current_status": "已叫号",
+      "last_operation": "叫号",
+      "last_operation_time": "2026-06-12 20:54:21",
+      "last_operator": "王五",
+      "platform": "A1",
+      "carrier": "中通物流",
+      "cargo_type": "普通货物"
+    },
+    {
+      "queue_number": 2,
+      "plate_number": "京F22222",
+      "current_status": "延迟",
+      "last_operation": "改预约时段",
+      "last_operation_time": "2026-06-12 20:54:11",
+      "last_operator": "李四",
+      "platform": null,
+      "carrier": "圆通物流",
+      "cargo_type": "危险品"
+    },
+    {
+      "queue_number": 3,
+      "plate_number": "京G33333",
+      "current_status": "已叫号",
+      "last_operation": "叫号",
+      "last_operation_time": "2026-06-12 20:54:21",
+      "last_operator": "王五",
+      "platform": "B1",
+      "carrier": "京东物流",
+      "cargo_type": "冷藏货物"
+    },
+    {
+      "queue_number": 4,
+      "plate_number": "京H44444",
+      "current_status": "已取消",
+      "last_operation": "取消排队",
+      "last_operation_time": "2026-06-12 20:54:21",
+      "last_operator": "李四",
+      "platform": null,
+      "carrier": "中远海运",
+      "cargo_type": "集装箱"
+    },
+    {
+      "queue_number": 5,
+      "plate_number": "京J55555",
+      "current_status": "已叫号",
+      "last_operation": "叫号",
+      "last_operation_time": "2026-06-12 20:54:21",
+      "last_operator": "王五",
+      "platform": "A2",
+      "carrier": "顺丰物流",
+      "cargo_type": "普通货物"
+    }
+  ]
+}

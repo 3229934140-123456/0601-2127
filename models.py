@@ -39,9 +39,21 @@ class OperationType(str, Enum):
     START_LOADING = "开始装卸"
     FINISH_LOADING = "完成装卸"
     MARK_DELAY = "标记延迟"
-    CANCEL = "取消排队"
+    RESUME_QUEUE = "恢复排队"
+    CANCEL_QUEUE = "取消排队"
+    CHANGE_APPOINTMENT = "改预约时段"
     BATCH_IMPORT = "批量导入"
     EXPORT_REPORT = "导出报表"
+
+
+PLATFORM_CARGO_FIT = {
+    "A1": [CargoType.GENERAL, CargoType.BULK, CargoType.CONTAINER],
+    "A2": [CargoType.GENERAL, CargoType.BULK, CargoType.CONTAINER],
+    "B1": [CargoType.REFRIGERATED, CargoType.GENERAL],
+    "B2": [CargoType.REFRIGERATED, CargoType.GENERAL],
+    "C1": [CargoType.DANGEROUS],
+    "C2": [CargoType.DANGEROUS],
+}
 
 
 @dataclass

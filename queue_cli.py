@@ -3,6 +3,7 @@
 
 import argparse
 import sys
+import os
 from datetime import datetime
 from typing import List, Optional
 
@@ -25,7 +26,7 @@ class QueueCLI:
   # 车辆签到
   queue checkin --plate 京A12345 --phone 13800138000 --cargo dangerous --carrier 顺丰 --appointment "09:00" --operator 张三
 
-  # CSV批量导入
+  # CSV批量导入（带预检确认）
   queue checkin --import appointment.csv --operator 张三
 
   # 查看等待车辆
@@ -46,6 +47,15 @@ class QueueCLI:
   # 标记延迟
   queue delay --queue 5 --reason late --note "司机堵车" --operator 张三
 
+  # 恢复排队
+  queue delay --queue 5 --resume --operator 张三
+
+  # 取消排队
+  queue delay --queue 5 --cancel --operator 张三
+
+  # 改预约时段
+  queue delay --queue 5 --change-appointment "14:00" --operator 张三
+
   # 开始装卸
   queue finish --queue 5 --start --operator 张三
 
@@ -54,12 +64,19 @@ class QueueCLI:
 
   # 查看操作日志
   queue logs --limit 20
+  queue logs --queue 5 --plate 京A12345
+  queue logs --start "2026-06-12 08:00:00" --end "2026-06-12 16:00:00"
 
-  # 组合筛选报表
+  # 导出交接班日志
+  queue logs --export-shift shift_log.json --start "2026-06-12 08:00:00" --end "2026-06-12 16:00:00"
+
+  # 组合筛选报表（所有筛选均显示完整汇总）
   queue report --carrier 顺丰物流 --platform A1 --carrier-stats --operator 张三
+  queue report --dangerous --carrier-stats
+  queue report --refrigerated
 
-  # 导出筛选后的报表
-  queue report --dangerous --export dangerous_report.json --operator 张三
+  # 导出筛选后的报表（JSON + CSV）
+  queue report --dangerous --export dangerous_report.json --export-csv dangerous_detail.csv
             """
         )
         parser.add_argument("--operator", default="系统", help="调度员姓名，用于操作日志记录")
@@ -76,7 +93,7 @@ class QueueCLI:
 
     def _add_checkin_parser(self, subparsers):
         parser = subparsers.add_parser("checkin", help="车辆签到或CSV批量导入")
-        parser.add_argument("--import", dest="import_csv", help="从CSV文件批量导入预约车辆")
+        parser.add_argument("--import", dest="import_csv", help="从CSV文件批量导入预约车辆（带预检确认）")
         parser.add_argument("--plate", help="车牌号 (如: 京A12345)")
         parser.add_argument("--phone", help="司机电话")
         parser.add_argument("--cargo", choices=["general", "dangerous", "refrigerated", "bulk", "container"],
@@ -97,15 +114,19 @@ class QueueCLI:
         parser.add_argument("--dangerous", action="store_true", help="只查看危险品车辆")
         parser.add_argument("--refrigerated", action="store_true", help="只查看冷藏车辆")
         parser.add_argument("--include-delayed", action="store_true", help="叫号时包含延迟车辆")
-        parser.add_argument("--suggest", action="store_true", help="调度建议模式，按预约时段、货类优先级、月台能力给出建议")
+        parser.add_argument("--suggest", action="store_true", help="调度建议模式，按预约时段、货类优先级、月台适配给出建议")
 
     def _add_delay_parser(self, subparsers):
-        parser = subparsers.add_parser("delay", help="标记迟到和插队原因")
+        parser = subparsers.add_parser("delay", help="标记延迟 / 恢复排队 / 取消排队 / 改预约时段")
         parser.add_argument("--queue", type=int, required=True, help="排队号")
-        parser.add_argument("--reason", required=True,
+        parser.add_argument("--reason",
                             choices=["late", "document", "carrier", "yard", "equipment", "priority", "other"],
                             help="延迟原因: late(迟到), document(单据问题), carrier(承运商要求), yard(场站调度), equipment(设备故障), priority(优先插队), other(其他)")
         parser.add_argument("--note", help="补充说明")
+        parser.add_argument("--resume", action="store_true", help="恢复排队（将延迟车辆恢复为等待中）")
+        parser.add_argument("--cancel", action="store_true", help="取消排队")
+        parser.add_argument("--change-appointment", dest="change_appointment",
+                            help="修改预约时段 (如: 14:00 或 2026-06-12 14:00:00)")
 
     def _add_finish_parser(self, subparsers):
         parser = subparsers.add_parser("finish", help="记录开始和完成装卸时间")
@@ -119,16 +140,23 @@ class QueueCLI:
         parser.add_argument("--carrier", help="按承运商筛选")
         parser.add_argument("--platform", help="按月台筛选")
         parser.add_argument("--export", help="导出JSON报告到指定文件")
+        parser.add_argument("--export-csv", dest="export_csv", help="导出CSV明细到指定文件")
         parser.add_argument("--carrier-stats", action="store_true", help="按承运商统计停留时长（基于筛选结果）")
         parser.add_argument("--overtime", action="store_true", help="只查看超时等待车辆")
         parser.add_argument("--threshold", type=int, default=120, help="超时阈值（分钟），默认120分钟")
 
     def _add_logs_parser(self, subparsers):
-        parser = subparsers.add_parser("logs", help="查看当天操作日志（交接班核对）")
+        parser = subparsers.add_parser("logs", help="查看操作日志 / 导出交接班日志")
         parser.add_argument("--limit", type=int, default=50, help="显示最近N条记录，默认50条")
         parser.add_argument("--operator", help="按调度员筛选")
-        parser.add_argument("--type", choices=["checkin", "call", "platform", "start", "finish", "delay", "import", "export"],
+        parser.add_argument("--type", choices=["checkin", "call", "platform", "start", "finish", "delay",
+                                               "resume", "cancel", "appointment", "import", "export"],
                             help="按操作类型筛选")
+        parser.add_argument("--queue", type=int, help="按排队号筛选")
+        parser.add_argument("--plate", help="按车牌号筛选")
+        parser.add_argument("--start", dest="start_time", help="开始时间 (如: 2026-06-12 08:00:00)")
+        parser.add_argument("--end", dest="end_time", help="结束时间 (如: 2026-06-12 16:00:00)")
+        parser.add_argument("--export-shift", dest="export_shift", help="导出交接班日志到指定JSON文件")
 
     def _parse_cargo_type(self, cargo: str) -> CargoType:
         mapping = {
@@ -160,6 +188,9 @@ class QueueCLI:
             "start": OperationType.START_LOADING,
             "finish": OperationType.FINISH_LOADING,
             "delay": OperationType.MARK_DELAY,
+            "resume": OperationType.RESUME_QUEUE,
+            "cancel": OperationType.CANCEL_QUEUE,
+            "appointment": OperationType.CHANGE_APPOINTMENT,
             "import": OperationType.BATCH_IMPORT,
             "export": OperationType.EXPORT_REPORT
         }
@@ -211,25 +242,84 @@ class QueueCLI:
             print()
 
     def _print_suggestion(self, suggestion: dict, idx: int):
+        match_icon = "✓" if suggestion.get("platform_match") else "⚠"
         print(f"\n  建议 {idx + 1}: #{suggestion['queue_number']} {suggestion['plate_number']}")
         print(f"     货类: {suggestion['cargo_type']} | 承运商: {suggestion['carrier']} | 已等待: {suggestion['waiting_minutes']}分钟")
-        print(f"     建议月台: {suggestion['suggested_platform'] or '暂无可用月台'}")
+        print(f"     建议月台: {suggestion['suggested_platform'] or '暂无可用月台'} {match_icon}")
         print(f"     推荐理由: {'，'.join(suggestion['reasons'])}")
+
+    def _print_summary(self, vehicles: List[Vehicle], threshold: int = 120, filters: List[str] = None):
+        waiting = len([v for v in vehicles if v.status == VehicleStatus.WAITING])
+        called = len([v for v in vehicles if v.status == VehicleStatus.CALLED])
+        loading = len([v for v in vehicles if v.status == VehicleStatus.LOADING])
+        finished = len([v for v in vehicles if v.status == VehicleStatus.FINISHED])
+        delayed = len([v for v in vehicles if v.status == VehicleStatus.DELAYED])
+        cancelled = len([v for v in vehicles if v.status == VehicleStatus.CANCELLED])
+        overtime = len([v for v in vehicles if v.is_overtime(threshold)])
+        finished_vehicles = [v for v in vehicles if v.status == VehicleStatus.FINISHED]
+        total_stay = sum(v.stay_minutes() or 0 for v in finished_vehicles)
+        avg_stay = round(total_stay / len(finished_vehicles), 1) if finished_vehicles else 0
+
+        print("=" * 70)
+        if filters:
+            print(f"筛选条件: {' | '.join(filters)}")
+        print(f"报告日期: {datetime.now().strftime('%Y-%m-%d')}")
+        print(f"总车辆数: {len(vehicles)}")
+        print(f"等待中: {waiting} | 已叫号: {called} | 装卸中: {loading} | 已完成: {finished} | 延迟: {delayed} | 已取消: {cancelled}")
+        print(f"超时等待: {overtime} | 平均停留时长: {avg_stay} 分钟")
+        print("=" * 70)
 
     def cmd_checkin(self, args):
         operator = args.operator
 
         if args.import_csv:
-            print(f"\n📥 开始从 CSV 导入: {args.import_csv}")
+            print(f"\n📥 开始CSV预检: {args.import_csv}")
             print("=" * 60)
-            success, skipped, errors, error_details = self.storage.import_from_csv(args.import_csv, operator=operator)
-            print(f"✅ 导入完成！成功: {success} | 跳过重复: {skipped} | 格式错误: {errors}")
-            print("=" * 60)
-            if error_details:
-                print("详细信息:")
-                for detail in error_details:
-                    print(f"  - {detail}")
-            print("=" * 60)
+
+            preview = self.storage.preview_csv_import(args.import_csv)
+
+            if "error" in preview:
+                print(f"❌ {preview['error']}")
+                return
+
+            print(f"📋 预检结果：")
+            print(f"   ✅ 可导入: {preview['valid']} 辆")
+            print(f"   ⏭️  跳过(重复): {preview['skipped']} 辆")
+            print(f"   ❌ 格式错误: {preview['errors']} 辆")
+
+            if preview["warnings"]:
+                print(f"\n⚠️  预检警告/错误明细：")
+                for w in preview["warnings"]:
+                    print(f"   - {w}")
+
+            if preview["valid_rows"]:
+                print(f"\n📋 待导入车辆预览：")
+                for r in preview["valid_rows"]:
+                    print(f"   第{r['row_num']}行: {r['plate']} | {r['cargo_type'].value} | {r['carrier']} | {r['appointment']}")
+
+            if preview["error_rows"]:
+                failed_file = os.path.splitext(args.import_csv)[0] + "_failed.csv"
+                self.storage.export_failed_rows(preview["error_rows"], failed_file)
+                print(f"\n📤 错误行已导出到: {failed_file}，请修改后重新导入")
+
+            if preview["valid"] == 0:
+                print("\n❌ 没有可导入的有效数据，已取消导入。")
+                return
+
+            print(f"\n" + "=" * 60)
+            confirm = input(f"确认导入 {preview['valid']} 辆车辆？(y/N): ")
+            if confirm.lower() == 'y':
+                success, skipped, errors, error_details = self.storage.execute_csv_import(preview, operator=operator)
+                print("=" * 60)
+                print(f"✅ 导入完成！成功: {success} | 跳过重复: {skipped} | 格式错误: {errors}")
+                print("=" * 60)
+                if error_details:
+                    print("详细信息:")
+                    for detail in error_details:
+                        print(f"  - {detail}")
+                print("=" * 60)
+            else:
+                print("已取消导入。")
             self.check_overtime_vehicles()
             return
 
@@ -313,18 +403,28 @@ class QueueCLI:
             suggestion = self.storage.get_dispatch_suggestion(count=count)
 
             if not suggestion["suggestions"]:
-                print(f"❌ {suggestion.get('reason', '没有可调度的车辆')}")
+                reason = suggestion.get("reason", "没有可调度的车辆")
+                print(f"❌ {reason}")
+                if "platform_status" in suggestion and suggestion["platform_status"]:
+                    print(f"\n📊 当前月台使用情况（全部满载）:")
+                    for platform, status in suggestion["platform_status"].items():
+                        bar = "█" * status["loading"] + "░" * (status["capacity"] - status["loading"])
+                        print(f"   {platform}: {bar} {status['loading']}/{status['capacity']}")
                 return
 
             print(f"📊 当前月台使用情况:")
             for platform, status in suggestion["platform_status"].items():
-                bar = "█" * status["loading"] + "░" * (status["capacity"] - status["loading"])
-                print(f"   {platform}: {bar} {status['loading']}/{status['capacity']}")
+                bar = "█" * status["loading"] + "░" * status["available"]
+                full_tag = " [满]" if status["available"] == 0 else ""
+                print(f"   {platform}: {bar} {status['loading']}/{status['capacity']}{full_tag}")
 
             print(f"\n💡 推荐叫号顺序 (共 {suggestion['total_ready']} 辆待调度):")
             print("-" * 70)
             for i, s in enumerate(suggestion["suggestions"]):
                 self._print_suggestion(s, i)
+
+            if suggestion.get("skipped_no_platform", 0) > 0:
+                print(f"\n⚠️  另有 {suggestion['skipped_no_platform']} 辆车因月台满载暂无法叫号")
 
             print("\n" + "-" * 70)
             confirm = input("是否确认按以上建议叫号？(y/N): ")
@@ -356,6 +456,7 @@ class QueueCLI:
             self._print_vehicle_table(vehicles, show_details=True)
             if delayed:
                 print(f"\nℹ️  延迟车辆共 {len(delayed)} 辆，批量叫号时默认跳过，使用 --include-delayed 可包含")
+                print("   使用 delay --resume 恢复排队，delay --cancel 取消排队")
         elif args.count:
             include_delayed = getattr(args, 'include_delayed', False)
             called = self.storage.call_vehicles(args.count, args.platform, include_delayed=include_delayed, operator=operator)
@@ -363,8 +464,7 @@ class QueueCLI:
                 print(f"\n📢 已叫号 {len(called)} 辆车：")
                 for v in called:
                     platform_info = f"，前往月台 {v.platform}" if v.platform else ""
-                    delay_info = " (延迟车)" if v.status == VehicleStatus.DELAYED else ""
-                    print(f"  #{v.queue_number} {v.plate_number} ({v.carrier}){platform_info}{delay_info}")
+                    print(f"  #{v.queue_number} {v.plate_number} ({v.carrier}){platform_info}")
             else:
                 print("\n没有可叫号的等待车辆。")
                 if not include_delayed:
@@ -390,6 +490,61 @@ class QueueCLI:
 
     def cmd_delay(self, args):
         operator = args.operator
+
+        if args.resume:
+            v = self.storage.resume_queue(args.queue, operator=operator)
+            if v:
+                print("\n" + "=" * 50)
+                print("✅ 恢复排队成功！")
+                print("=" * 50)
+                print(f"排队号: #{v.queue_number}")
+                print(f"车牌号: {v.plate_number}")
+                print(f"当前状态: {v.status.value}")
+                print(f"操作人: {operator}")
+                print("=" * 50)
+            else:
+                print(f"错误：未找到排队号为 {args.queue} 的延迟车辆")
+            return
+
+        if args.cancel:
+            v = self.storage.cancel_queue(args.queue, operator=operator)
+            if v:
+                print("\n" + "=" * 50)
+                print("✅ 取消排队成功！")
+                print("=" * 50)
+                print(f"排队号: #{v.queue_number}")
+                print(f"车牌号: {v.plate_number}")
+                print(f"当前状态: {v.status.value}")
+                print(f"操作人: {operator}")
+                print("=" * 50)
+            else:
+                print(f"错误：未找到排队号为 {args.queue} 的可取消车辆")
+            return
+
+        if args.change_appointment:
+            new_appt = args.change_appointment
+            if len(new_appt) <= 5 and ':' in new_appt:
+                today = datetime.now().strftime("%Y-%m-%d")
+                new_appt = f"{today} {new_appt}:00"
+            v = self.storage.change_appointment(args.queue, new_appt, operator=operator)
+            if v:
+                print("\n" + "=" * 50)
+                print("✅ 修改预约时段成功！")
+                print("=" * 50)
+                print(f"排队号: #{v.queue_number}")
+                print(f"车牌号: {v.plate_number}")
+                print(f"新预约时段: {v.appointment_time}")
+                print(f"操作人: {operator}")
+                print("=" * 50)
+            else:
+                print(f"错误：未找到排队号为 {args.queue} 的车辆")
+            return
+
+        if not args.reason:
+            print("错误：标记延迟必须提供 --reason 参数")
+            print("或使用 --resume 恢复排队 / --cancel 取消排队 / --change-appointment 修改预约时段")
+            sys.exit(1)
+
         reason = self._parse_delay_reason(args.reason)
         v = self.storage.mark_delay(args.queue, reason, args.note, operator=operator)
         if v:
@@ -406,7 +561,9 @@ class QueueCLI:
             print(f"操作人: {operator}")
             print("=" * 50)
             print("\nℹ️  此车辆将留在等待列表中，但批量叫号时会自动跳过")
-            print("   使用 call --include-delayed 可强制叫号延迟车辆")
+            print("   使用 delay --resume 恢复排队")
+            print("   使用 delay --cancel 取消排队")
+            print("   使用 delay --change-appointment 修改预约时段")
         else:
             print(f"错误：未找到排队号为 {args.queue} 的车辆")
 
@@ -479,28 +636,11 @@ class QueueCLI:
                 vehicles = [v for v in vehicles if v.carrier == carrier]
             if platform:
                 vehicles = [v for v in vehicles if v.platform == platform]
+            self._print_summary(vehicles, args.threshold, filters)
         else:
             report = self.storage.get_daily_report(carrier=carrier, cargo_type=cargo_type, platform=platform)
             vehicles = report.vehicles
-
-        print("=" * 70)
-        if filters:
-            print(f"筛选条件: {' | '.join(filters)}")
-        print(f"报告日期: {datetime.now().strftime('%Y-%m-%d')}")
-        print(f"总车辆数: {len(vehicles)}")
-
-        if not args.overtime and not args.dangerous and not args.refrigerated:
-            waiting = len([v for v in vehicles if v.status == VehicleStatus.WAITING])
-            loading = len([v for v in vehicles if v.status == VehicleStatus.LOADING])
-            finished = len([v for v in vehicles if v.status == VehicleStatus.FINISHED])
-            delayed = len([v for v in vehicles if v.status == VehicleStatus.DELAYED])
-            overtime = len([v for v in vehicles if v.is_overtime(args.threshold)])
-            finished_vehicles = [v for v in vehicles if v.status == VehicleStatus.FINISHED]
-            total_stay = sum(v.stay_minutes() or 0 for v in finished_vehicles)
-            avg_stay = round(total_stay / len(finished_vehicles), 1) if finished_vehicles else 0
-            print(f"等待中: {waiting} | 装卸中: {loading} | 已完成: {finished} | 延迟: {delayed}")
-            print(f"超时等待: {overtime} | 平均停留时长: {avg_stay} 分钟")
-        print("=" * 70)
+            self._print_summary(vehicles, args.threshold, filters)
 
         if args.carrier_stats and not args.overtime:
             print("\n📈 承运商停留时长统计（基于当前筛选结果）：")
@@ -518,20 +658,65 @@ class QueueCLI:
         self._print_vehicle_table(vehicles, show_details=True)
 
         if args.export:
-            filepath = self.storage.export_report(
+            filepath = self.storage.export_report_json(
                 args.export, cargo_type=cargo_type, carrier=carrier, platform=platform, operator=operator
             )
-            print(f"\n✅ 报告已导出到: {filepath}")
-            print(f"   筛选条件已应用到导出数据")
+            print(f"\n✅ JSON报告已导出到: {filepath}")
+
+        if args.export_csv:
+            filepath = self.storage.export_report_csv(
+                args.export_csv, cargo_type=cargo_type, carrier=carrier, platform=platform, operator=operator
+            )
+            print(f"✅ CSV明细已导出到: {filepath}")
 
         self.check_overtime_vehicles(args.threshold)
 
     def cmd_logs(self, args):
         op_type = self._parse_operation_type(args.type) if args.type else None
-        logs = self.storage.get_logs(operator=args.operator, operation_type=op_type)
+        queue_number = getattr(args, 'queue', None)
+        plate = getattr(args, 'plate', None)
+        start_time = getattr(args, 'start_time', None)
+        end_time = getattr(args, 'end_time', None)
+
+        if getattr(args, 'export_shift', None):
+            filepath = self.storage.export_shift_log(
+                args.export_shift, start_time=start_time, end_time=end_time, operator=args.operator
+            )
+            print(f"\n✅ 交接班日志已导出到: {filepath}")
+            handover = self.storage.get_shift_handover_data(start_time=start_time, end_time=end_time)
+            print(f"   时间段: {handover['period']['start']} ~ {handover['period']['end']}")
+            print(f"   总车辆数: {handover['total_vehicles']}")
+            print(f"   等待中: {handover['summary']['waiting']} | 已叫号: {handover['summary']['called']} | "
+                  f"装卸中: {handover['summary']['loading']} | 已完成: {handover['summary']['finished']} | "
+                  f"延迟: {handover['summary']['delayed']} | 已取消: {handover['summary']['cancelled']}")
+            print(f"   期间操作次数: {handover['operations_in_period']}")
+            return
+
+        logs = self.storage.get_logs(
+            operator=getattr(args, 'operator', None),
+            operation_type=op_type,
+            queue_number=queue_number,
+            plate_number=plate,
+            start_time=start_time,
+            end_time=end_time
+        )
         logs = logs[:args.limit]
 
-        print("\n📋 操作日志（最近操作在最前）")
+        filter_parts = []
+        if getattr(args, 'operator', None):
+            filter_parts.append(f"调度员={args.operator}")
+        if op_type:
+            filter_parts.append(f"类型={op_type.value}")
+        if queue_number:
+            filter_parts.append(f"排队号=#{queue_number}")
+        if plate:
+            filter_parts.append(f"车牌={plate}")
+        if start_time:
+            filter_parts.append(f"起始={start_time}")
+        if end_time:
+            filter_parts.append(f"截止={end_time}")
+
+        print("\n📋 操作日志" + (f"（{' | '.join(filter_parts)}）" if filter_parts else "（最近操作在最前）"))
         print("=" * 90)
         print(f"{'时间':<20} {'操作人':<10} {'操作类型':<12} {'排队号':<6} {'车牌':<12} 详情")
         print("-" * 90)

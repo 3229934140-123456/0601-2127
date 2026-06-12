@@ -4,17 +4,17 @@
 import os
 import sys
 import json
+import csv
 import shutil
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from models import Vehicle, CargoType, VehicleStatus, DelayReason, OperationLog, OperationType
+from models import Vehicle, CargoType, VehicleStatus, DelayReason, OperationLog, OperationType, PLATFORM_CARGO_FIT
 from storage import QueueStorage
 
 
 def test_data_directory():
-    """测试数据目录创建"""
     print("🧪 测试1: 数据目录创建...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     if os.path.exists(test_dir):
@@ -26,7 +26,6 @@ def test_data_directory():
 
 
 def test_vehicle_checkin():
-    """测试车辆签到"""
     print("\n🧪 测试2: 车辆签到...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     if os.path.exists(test_dir):
@@ -73,7 +72,6 @@ def test_vehicle_checkin():
 
 
 def test_waiting_and_call():
-    """测试等待队列和叫号"""
     print("\n🧪 测试3: 等待队列和叫号...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     storage = QueueStorage(test_dir)
@@ -94,7 +92,6 @@ def test_waiting_and_call():
 
 
 def test_delay():
-    """测试延迟标记"""
     print("\n🧪 测试4: 延迟标记...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     storage = QueueStorage(test_dir)
@@ -113,7 +110,6 @@ def test_delay():
 
 
 def test_platform_adjustment():
-    """测试月台调整"""
     print("\n🧪 测试5: 月台调整...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     storage = QueueStorage(test_dir)
@@ -126,7 +122,6 @@ def test_platform_adjustment():
 
 
 def test_start_and_finish():
-    """测试装卸开始和完成"""
     print("\n🧪 测试6: 装卸开始和完成...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     storage = QueueStorage(test_dir)
@@ -146,7 +141,6 @@ def test_start_and_finish():
 
 
 def test_specific_cargo_filter():
-    """测试危险品/冷藏车筛选"""
     print("\n🧪 测试7: 危险品/冷藏车筛选...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     storage = QueueStorage(test_dir)
@@ -163,7 +157,6 @@ def test_specific_cargo_filter():
 
 
 def test_overtime_detection():
-    """测试超时检测"""
     print("\n🧪 测试8: 超时检测...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     storage = QueueStorage(test_dir)
@@ -189,7 +182,6 @@ def test_overtime_detection():
 
 
 def test_carrier_stats():
-    """测试承运商统计"""
     print("\n🧪 测试9: 承运商统计...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     storage = QueueStorage(test_dir)
@@ -207,13 +199,12 @@ def test_carrier_stats():
 
 
 def test_export_report():
-    """测试报表导出"""
     print("\n🧪 测试10: 报表导出...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     storage = QueueStorage(test_dir)
 
     export_file = os.path.join(test_dir, "export_test.json")
-    filepath = storage.export_report(export_file)
+    filepath = storage.export_report_json(export_file)
     assert os.path.exists(filepath), "导出文件未创建"
 
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -224,7 +215,7 @@ def test_export_report():
     assert len(data["vehicles"]) >= 4, "导出车辆数应>=4"
 
     export_dangerous = os.path.join(test_dir, "export_dangerous.json")
-    filepath = storage.export_report(export_dangerous, CargoType.DANGEROUS)
+    filepath = storage.export_report_json(export_dangerous, CargoType.DANGEROUS)
     with open(filepath, 'r', encoding='utf-8') as f:
         data = json.load(f)
     assert len(data["vehicles"]) == 1, "危险品导出应只有1辆车"
@@ -233,7 +224,6 @@ def test_export_report():
 
 
 def test_cli_help():
-    """测试CLI帮助"""
     print("\n🧪 测试11: CLI帮助...")
     import subprocess
     result = subprocess.run([sys.executable, "queue_cli.py", "--help"],
@@ -248,7 +238,6 @@ def test_cli_help():
 
 
 def test_data_persistence():
-    """测试数据持久化"""
     print("\n🧪 测试12: 数据持久化...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     storage1 = QueueStorage(test_dir)
@@ -266,7 +255,6 @@ def test_data_persistence():
 
 
 def test_delayed_vehicle_skipping():
-    """测试批量叫号时跳过延迟车辆"""
     print("\n🧪 测试13: 延迟车辆跳过逻辑...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     if os.path.exists(test_dir):
@@ -305,7 +293,6 @@ def test_delayed_vehicle_skipping():
 
 
 def test_operation_logs():
-    """测试操作日志功能"""
     print("\n🧪 测试14: 操作日志功能...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     if os.path.exists(test_dir):
@@ -348,8 +335,7 @@ def test_operation_logs():
 
 
 def test_csv_import():
-    """测试CSV批量导入"""
-    print("\n🧪 测试15: CSV批量导入...")
+    print("\n🧪 测试15: CSV批量导入（预检+执行）...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     if os.path.exists(test_dir):
         shutil.rmtree(test_dir)
@@ -368,7 +354,14 @@ def test_csv_import():
     with open(csv_file, 'w', encoding='utf-8-sig') as f:
         f.write(csv_content)
 
-    success, skipped, errors, details = storage.import_from_csv(csv_file, operator="导入员")
+    preview = storage.preview_csv_import(csv_file)
+    assert preview["valid"] == 4, f"预检有效行应为4，实际为{preview['valid']}"
+    assert preview["skipped"] == 1, f"预检跳过应为1，实际为{preview['skipped']}"
+    assert preview["errors"] == 2, f"预检错误应为2，实际为{preview['errors']}"
+    assert len(preview["valid_rows"]) == 4
+    assert len(preview["error_rows"]) == 2
+
+    success, skipped, errors, details = storage.execute_csv_import(preview, operator="导入员")
     assert success == 4, f"成功导入应为4，实际为{success}"
     assert skipped == 1, f"跳过重复应为1，实际为{skipped}"
     assert errors == 2, f"错误应为2，实际为{errors}"
@@ -394,11 +387,19 @@ def test_csv_import():
     assert len(import_logs) == 1
     assert import_logs[0].operator == "导入员"
 
+    failed_file = os.path.join(test_dir, "test_import_failed.csv")
+    if preview["error_rows"]:
+        storage.export_failed_rows(preview["error_rows"], failed_file)
+        assert os.path.exists(failed_file), "失败行文件应被创建"
+        with open(failed_file, 'r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+            assert len(rows) == 2, f"失败行应为2，实际为{len(rows)}"
+
     print("✅ CSV批量导入测试通过")
 
 
 def test_dispatch_suggestion():
-    """测试调度建议功能"""
     print("\n🧪 测试16: 调度建议功能...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     if os.path.exists(test_dir):
@@ -439,18 +440,23 @@ def test_dispatch_suggestion():
     first = suggestion["suggestions"][0]
     assert first["cargo_type"] == "危险品"
     assert first["suggested_platform"] is not None
+    assert first["suggested_platform"].startswith("C"), "危险品应优先分配C区月台"
+
+    second = suggestion["suggestions"][1]
+    assert second["cargo_type"] == "冷藏货物"
+    assert second["suggested_platform"].startswith("B"), "冷藏应优先分配B区月台"
 
     for s in suggestion["suggestions"]:
         assert "queue_number" in s
         assert "plate_number" in s
         assert "reasons" in s
-        assert len(s["reasons"]) >= 2
+        assert len(s["reasons"]) >= 3
+        assert "platform_match" in s
 
     print("✅ 调度建议功能测试通过")
 
 
 def test_combined_filters():
-    """测试组合筛选功能"""
     print("\n🧪 测试17: 组合筛选功能...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     if os.path.exists(test_dir):
@@ -501,19 +507,17 @@ def test_combined_filters():
     assert carrier_stats[0]["total"] == 2
 
     export_file = os.path.join(test_dir, "filtered_export.json")
-    filepath = storage.export_report(export_file, carrier="顺丰", platform="A1")
+    filepath = storage.export_report_json(export_file, carrier="顺丰", platform="A1")
     with open(filepath, 'r', encoding='utf-8') as f:
         data = json.load(f)
     assert data["filters"]["carrier"] == "顺丰"
     assert data["filters"]["platform"] == "A1"
     assert len(data["vehicles"]) == 1
-    assert data["summary"]["total_vehicles"] == 1
 
     print("✅ 组合筛选功能测试通过")
 
 
 def test_operator_parameter():
-    """测试调度员参数关联"""
     print("\n🧪 测试18: 调度员参数关联...")
     test_dir = os.path.join(os.path.dirname(__file__), "test_data")
     if os.path.exists(test_dir):
@@ -533,7 +537,7 @@ def test_operator_parameter():
     storage.set_platform(1, "A2", operator="李四")
     storage.start_loading(1, operator="王五")
     storage.finish_loading(1, operator="王五")
-    storage.export_report(os.path.join(test_dir, "test.json"), operator="赵六")
+    storage.export_report_json(os.path.join(test_dir, "test.json"), operator="赵六")
 
     logs = storage.get_logs()
     operators = {log.operator for log in logs}
@@ -551,6 +555,258 @@ def test_operator_parameter():
     assert len(lisi_logs) == 2
 
     print("✅ 调度员参数关联测试通过")
+
+
+def test_delay_resume_cancel():
+    print("\n🧪 测试19: 延迟车辆恢复排队/取消排队/改预约...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    for i in range(3):
+        v = Vehicle(
+            plate_number=f"京W{i+1:05d}",
+            driver_phone=f"1390000000{i+1}",
+            cargo_type=CargoType.GENERAL,
+            carrier="测试物流",
+            appointment_time="2026-06-12 10:00:00"
+        )
+        storage.add_vehicle(v, operator="调度员A")
+
+    storage.mark_delay(2, DelayReason.LATE_ARRIVAL, "堵车", operator="调度员A")
+    v = storage.get_vehicle_by_queue(2)
+    assert v.status == VehicleStatus.DELAYED
+
+    v_resumed = storage.resume_queue(2, operator="调度员B")
+    assert v_resumed is not None
+    assert v_resumed.status == VehicleStatus.WAITING
+    assert v_resumed.delay_reason is None
+    assert v_resumed.delay_time is None
+
+    resume_logs = storage.get_logs(operation_type=OperationType.RESUME_QUEUE)
+    assert len(resume_logs) == 1
+    assert resume_logs[0].operator == "调度员B"
+    assert "恢复" in resume_logs[0].description
+
+    storage.mark_delay(3, DelayReason.CARRIER_REQUEST, "承运商要求", operator="调度员A")
+    v_cancelled = storage.cancel_queue(3, operator="调度员C")
+    assert v_cancelled is not None
+    assert v_cancelled.status == VehicleStatus.CANCELLED
+
+    cancel_logs = storage.get_logs(operation_type=OperationType.CANCEL_QUEUE)
+    assert len(cancel_logs) == 1
+    assert cancel_logs[0].operator == "调度员C"
+
+    storage.change_appointment(1, "2026-06-12 14:00:00", operator="调度员D")
+    v_changed = storage.get_vehicle_by_queue(1)
+    assert v_changed.appointment_time == "2026-06-12 14:00:00"
+
+    appt_logs = storage.get_logs(operation_type=OperationType.CHANGE_APPOINTMENT)
+    assert len(appt_logs) == 1
+    assert appt_logs[0].operator == "调度员D"
+    assert "预约时段" in appt_logs[0].description
+
+    print("✅ 延迟车辆恢复/取消/改预约测试通过")
+
+
+def test_log_advanced_query():
+    print("\n🧪 测试20: 操作日志高级查询...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    v1 = Vehicle(plate_number="京X00001", driver_phone="13800000001",
+                 cargo_type=CargoType.GENERAL, carrier="物流A", appointment_time="2026-06-12 08:00:00")
+    v2 = Vehicle(plate_number="京X00002", driver_phone="13800000002",
+                 cargo_type=CargoType.DANGEROUS, carrier="物流B", appointment_time="2026-06-12 09:00:00",
+                 dangerous_level="一级")
+    storage.add_vehicle(v1, operator="早班A")
+    storage.add_vehicle(v2, operator="早班B")
+
+    logs_by_queue = storage.get_logs(queue_number=1)
+    assert all(l.queue_number == 1 for l in logs_by_queue)
+
+    logs_by_plate = storage.get_logs(plate_number="京X00002")
+    assert all(l.plate_number == "京X00002" for l in logs_by_plate)
+    assert len(logs_by_plate) >= 1
+
+    now_str = datetime.now().strftime("%Y-%m-%d")
+    logs_by_time = storage.get_logs(start_time=f"{now_str} 00:00:00", end_time=f"{now_str} 23:59:59")
+    assert len(logs_by_time) >= 2
+
+    print("✅ 操作日志高级查询测试通过")
+
+
+def test_shift_handover():
+    print("\n🧪 测试21: 交接班日志导出...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    for i in range(3):
+        v = Vehicle(plate_number=f"京Y{i+1:05d}", driver_phone=f"1380000000{i+1}",
+                     cargo_type=CargoType.GENERAL, carrier="测试物流", appointment_time="2026-06-12 10:00:00")
+        storage.add_vehicle(v, operator="交接班测试")
+
+    storage.call_specific_vehicles([1], platform="A1", operator="交接班测试")
+
+    handover = storage.get_shift_handover_data()
+    assert "summary" in handover
+    assert "vehicle_last_status" in handover
+    assert handover["total_vehicles"] == 3
+    assert len(handover["vehicle_last_status"]) == 3
+
+    first_vs = handover["vehicle_last_status"][0]
+    assert first_vs["queue_number"] == 1
+    assert first_vs["current_status"] == "已叫号"
+    assert first_vs["last_operator"] == "交接班测试"
+
+    export_file = os.path.join(test_dir, "shift_log.json")
+    filepath = storage.export_shift_log(export_file, operator="接班调度")
+    assert os.path.exists(filepath)
+    with open(filepath, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    assert "summary" in data
+    assert "vehicle_last_status" in data
+    assert "period" in data
+
+    print("✅ 交接班日志导出测试通过")
+
+
+def test_report_csv_export():
+    print("\n🧪 测试22: 报表CSV明细导出...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    for i in range(3):
+        v = Vehicle(plate_number=f"京Z{i+1:05d}", driver_phone=f"1380000000{i+1}",
+                     cargo_type=CargoType.GENERAL, carrier=f"物流{i+1}", appointment_time="2026-06-12 10:00:00")
+        storage.add_vehicle(v)
+        storage.call_specific_vehicles([v.queue_number], platform="A1")
+        storage.start_loading(v.queue_number)
+        storage.finish_loading(v.queue_number)
+
+    csv_file = os.path.join(test_dir, "report.csv")
+    filepath = storage.export_report_csv(csv_file)
+    assert os.path.exists(filepath)
+
+    with open(filepath, 'r', encoding='utf-8-sig') as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    assert len(rows) == 4, f"CSV应有1行表头+3行数据，实际为{len(rows)}"
+    assert "排队号" in rows[0][0]
+    assert "车牌号" in rows[0][1]
+
+    filtered_csv = os.path.join(test_dir, "filtered_report.csv")
+    storage.export_report_csv(filtered_csv, carrier="物流1")
+    with open(filtered_csv, 'r', encoding='utf-8-sig') as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    assert len(rows) == 2, f"筛选后CSV应有1行表头+1行数据，实际为{len(rows)}"
+
+    print("✅ 报表CSV明细导出测试通过")
+
+
+def test_dispatch_platform_full():
+    print("\n🧪 测试23: 调度建议月台满载检测...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    for i in range(18):
+        v = Vehicle(plate_number=f"京F{i+1:05d}", driver_phone=f"1380000000{i+1}",
+                     cargo_type=CargoType.GENERAL, carrier="测试物流", appointment_time="2026-06-12 10:00:00")
+        v = storage.add_vehicle(v)
+
+    platforms = ["A1"] * 3 + ["A2"] * 3 + ["B1"] * 2 + ["B2"] * 2 + ["C1"] * 4 + ["C2"] * 4
+    for i, v in enumerate(storage.get_all_vehicles()):
+        if i < len(platforms):
+            v.status = VehicleStatus.LOADING
+            v.platform = platforms[i]
+            v.start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            storage.update_vehicle(v)
+
+    v_wait = Vehicle(plate_number="京F99999", driver_phone="13899999999",
+                     cargo_type=CargoType.GENERAL, carrier="等待物流", appointment_time="2026-06-12 10:00:00")
+    storage.add_vehicle(v_wait)
+
+    suggestion = storage.get_dispatch_suggestion(count=1)
+    assert len(suggestion["suggestions"]) == 0, "月台满载时不应有建议"
+    assert suggestion.get("reason") == "所有月台已满，无法叫号"
+
+    print("✅ 调度建议月台满载检测测试通过")
+
+
+def test_cargo_filter_summary():
+    print("\n🧪 测试24: 货类筛选汇总统计...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    cargo_types = [CargoType.GENERAL, CargoType.DANGEROUS, CargoType.REFRIGERATED,
+                   CargoType.GENERAL, CargoType.DANGEROUS]
+    carriers = ["顺丰", "圆通", "京东", "中通", "申通"]
+
+    for i in range(5):
+        v = Vehicle(plate_number=f"京G{i+1:05d}", driver_phone=f"1380000000{i+1}",
+                     cargo_type=cargo_types[i], carrier=carriers[i],
+                     appointment_time="2026-06-12 10:00:00",
+                     dangerous_level="一级" if cargo_types[i] == CargoType.DANGEROUS else None,
+                     temperature_required="-18°C" if cargo_types[i] == CargoType.REFRIGERATED else None)
+        storage.add_vehicle(v)
+
+    storage.call_specific_vehicles([1], platform="A1")
+    storage.start_loading(1)
+    storage.finish_loading(1)
+    storage.mark_delay(2, DelayReason.LATE_ARRIVAL)
+
+    report = storage.get_daily_report(cargo_type=CargoType.DANGEROUS)
+    assert report.total_vehicles == 2
+    assert report.delayed_count == 1
+
+    summary = storage._compute_vehicle_summary(report.vehicles)
+    assert summary["delayed"] == 1
+    assert summary["waiting"] + summary["loading"] + summary["finished"] + summary["delayed"] + summary["cancelled"] == 2
+
+    print("✅ 货类筛选汇总统计测试通过")
+
+
+def test_csv_preview_validation():
+    print("\n🧪 测试25: CSV预检数据验证...")
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data")
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    storage = QueueStorage(test_dir)
+
+    csv_content = """plate,phone,cargo,carrier,appointment,dangerous_level,temperature
+京H11111,13500135000,普通货物,中通物流,08:30,,
+京H22222,1340bad,危险品,圆通物流,09:00,二级,
+京H33333,13300133000,冷藏货物,京东物流,not_a_time,,-18°C
+京H44444,13200132000,未知货类,中远海运,10:00,,
+京H55555,13100131000,危险品,顺丰物流,11:00,,
+"""
+    csv_file = os.path.join(test_dir, "test_validation.csv")
+    with open(csv_file, 'w', encoding='utf-8-sig') as f:
+        f.write(csv_content)
+
+    preview = storage.preview_csv_import(csv_file)
+    assert preview["valid"] == 1, f"有效行应为1（仅京H11111），实际为{preview['valid']}"
+    assert preview["errors"] >= 3, f"错误行应>=3，实际为{preview['errors']}"
+
+    has_phone_warning = any("电话" in w for w in preview["warnings"])
+    assert has_phone_warning, "应检测到电话格式问题"
+
+    has_time_warning = any("预约时间" in w for w in preview["warnings"])
+    assert has_time_warning, "应检测到预约时间格式问题"
+
+    print("✅ CSV预检数据验证测试通过")
 
 
 def main():
@@ -577,6 +833,13 @@ def main():
         test_dispatch_suggestion,
         test_combined_filters,
         test_operator_parameter,
+        test_delay_resume_cancel,
+        test_log_advanced_query,
+        test_shift_handover,
+        test_report_csv_export,
+        test_dispatch_platform_full,
+        test_cargo_filter_summary,
+        test_csv_preview_validation,
     ]
 
     passed = 0
@@ -593,6 +856,8 @@ def main():
             failed_tests.append(test.__name__)
         except Exception as e:
             print(f"❌ {test.__name__} 异常: {e}")
+            import traceback
+            traceback.print_exc()
             failed += 1
             failed_tests.append(test.__name__)
 
